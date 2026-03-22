@@ -1,7 +1,12 @@
+import os
+import streamlit as st
+from dotenv import load_dotenv
+
+load_dotenv()
+
 import json
 import logging
 import math
-import os
 import re
 import sqlite3
 import urllib.error
@@ -12,58 +17,35 @@ from pathlib import Path
 from typing import Optional, Tuple
 
 import pandas as pd
-import streamlit as st
-from dotenv import load_dotenv
-
 
 BASE_DIR = Path(__file__).resolve().parent
 DB_PATH = BASE_DIR / "business.db"
-_env_path = BASE_DIR / ".env"
+# Project-root .env (same folder as app.py) overrides cwd when both exist.
+load_dotenv(BASE_DIR / ".env", override=True)
 
-# Local: load .env (cwd discovery + explicit project root next to app.py).
-load_dotenv()
-load_dotenv(_env_path, override=True)
-load_dotenv(override=False)
+# Supabase: Streamlit Cloud secrets first, then .env / environment (single source for HTTP).
+SUPABASE_URL = None
+SUPABASE_KEY = None
 
+try:
+    SUPABASE_URL = st.secrets.get("SUPABASE_URL")
+    SUPABASE_KEY = st.secrets.get("SUPABASE_ANON_KEY")
+except Exception:
+    pass
 
-def _load_supabase_from_streamlit_secrets():
-    """Streamlit Cloud / .streamlit/secrets.toml: SUPABASE_URL and SUPABASE_ANON_KEY."""
-    try:
-        s = st.secrets
-        url = None
-        key = None
-        if hasattr(s, "get"):
-            url = s.get("SUPABASE_URL")
-            key = s.get("SUPABASE_ANON_KEY")
-        else:
-            if "SUPABASE_URL" in s:
-                url = s["SUPABASE_URL"]
-            if "SUPABASE_ANON_KEY" in s:
-                key = s["SUPABASE_ANON_KEY"]
-        return url, key
-    except Exception:
-        return None, None
+if not SUPABASE_URL:
+    SUPABASE_URL = os.getenv("SUPABASE_URL")
 
+if not SUPABASE_KEY:
+    SUPABASE_KEY = os.getenv("SUPABASE_ANON_KEY")
 
-def _normalize_supabase_url(raw: Optional[str]) -> str:
-    """Strip whitespace (including inside the string), optional quotes, and trailing slashes."""
-    if raw is None:
-        return ""
-    s = "".join(str(raw).split()).strip('"').strip("'")
-    return s.rstrip("/")
+if SUPABASE_URL:
+    SUPABASE_URL = str(SUPABASE_URL).strip()
+    # Remove accidental spaces inside the URL and trim quotes / trailing slash.
+    SUPABASE_URL = "".join(SUPABASE_URL.split()).strip('"').strip("'").rstrip("/")
 
-
-def is_valid_supabase_url(url: str) -> bool:
-    """Require https and a non-empty host to avoid DNS errors on bad URLs."""
-    if not url.startswith("https://"):
-        return False
-    return bool(urllib.parse.urlparse(url).netloc)
-
-
-# Secrets first (Cloud), then .env / OS — same pattern as st.secrets.get → os.getenv fallback.
-_sec_url, _sec_key = _load_supabase_from_streamlit_secrets()
-SUPABASE_URL = _normalize_supabase_url(_sec_url or os.getenv("SUPABASE_URL"))
-SUPABASE_KEY = (_sec_key or os.getenv("SUPABASE_ANON_KEY") or "").strip()
+if SUPABASE_KEY:
+    SUPABASE_KEY = str(SUPABASE_KEY).strip()
 
 _logger = logging.getLogger(__name__)
 if not SUPABASE_URL or not SUPABASE_KEY:
@@ -637,17 +619,23 @@ def fetch_customers_ordered() -> list:
 
 
 def supabase_is_configured() -> bool:
-    return bool(
-        SUPABASE_KEY and SUPABASE_URL and is_valid_supabase_url(SUPABASE_URL)
-    )
+    u = SUPABASE_URL or ""
+    if not u or not SUPABASE_KEY:
+        return False
+    if not u.startswith("https://"):
+        return False
+    return bool(urllib.parse.urlparse(u).netloc)
 
 
 def require_supabase_env() -> None:
     """Raise if Supabase URL/key are missing or URL is invalid (no secrets logged)."""
-    if not SUPABASE_KEY:
+    u = SUPABASE_URL or ""
+    if not u or not SUPABASE_KEY:
         raise RuntimeError("Supabase environment variables not loaded")
-    if not SUPABASE_URL or not is_valid_supabase_url(SUPABASE_URL):
-        raise RuntimeError("Invalid Supabase URL (must be a full https:// URL with a host)")
+    if not u.startswith("https://"):
+        raise RuntimeError("Invalid Supabase URL")
+    if not urllib.parse.urlparse(u).netloc:
+        raise RuntimeError("Invalid Supabase URL (missing host)")
 
 
 def insert_customer(customer: dict) -> list:
@@ -656,7 +644,6 @@ def insert_customer(customer: dict) -> list:
     Prefer: return=representation. Returns parsed JSON (inserted rows). No customer_code.
     """
     require_supabase_env()
-    st.write("DEBUG URL:", SUPABASE_URL)
     url = f"{SUPABASE_URL}/rest/v1/customers"
     headers = {
         "apikey": SUPABASE_KEY,
@@ -2827,11 +2814,14 @@ def fetch_revenue_timeseries():
 
 def main():
     st.set_page_config(page_title="ALIEH Business Manager", layout="wide")
-    if not SUPABASE_URL or not is_valid_supabase_url(SUPABASE_URL):
-        st.error(f"Invalid Supabase URL: {SUPABASE_URL}")
+    if not SUPABASE_URL:
+        st.error("SUPABASE_URL is EMPTY or NOT LOADED")
         st.stop()
     if not SUPABASE_KEY:
-        st.error("Supabase key not loaded")
+        st.error("SUPABASE_KEY is EMPTY or NOT LOADED")
+        st.stop()
+    if not SUPABASE_URL.startswith("https://"):
+        st.error(f"INVALID SUPABASE_URL: {SUPABASE_URL}")
         st.stop()
     init_db()
 
@@ -2948,8 +2938,8 @@ def main():
     st.title("Business Management System")
     st.caption("Clean, simple products + sales + dashboard (SQLite-backed).")
 
-    st.caption(f"Supabase URL loaded: {SUPABASE_URL}")
-    st.caption(f"Supabase KEY loaded: {'YES' if SUPABASE_KEY else 'NO'}")
+    st.caption(f"Supabase URL: {SUPABASE_URL}")
+    st.caption(f"Key loaded: {'YES' if SUPABASE_KEY else 'NO'}")
 
     page = st.sidebar.radio(
         "Navigation",
