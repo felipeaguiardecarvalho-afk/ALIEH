@@ -17,6 +17,7 @@ from pathlib import Path
 from typing import Optional, Tuple
 
 import pandas as pd
+import requests
 
 BASE_DIR = Path(__file__).resolve().parent
 DB_PATH = BASE_DIR / "business.db"
@@ -644,7 +645,9 @@ def insert_customer(customer: dict) -> list:
     Prefer: return=representation. Returns parsed JSON (inserted rows). No customer_code.
     """
     require_supabase_env()
-    url = f"{SUPABASE_URL}/rest/v1/customers"
+    base = str(SUPABASE_URL).strip().rstrip("/")
+    # Exact path; strip any accidental whitespace so the host resolves correctly.
+    url = "".join(f"{base}/rest/v1/customers".split())
     headers = {
         "apikey": SUPABASE_KEY,
         "Authorization": f"Bearer {SUPABASE_KEY}",
@@ -652,21 +655,27 @@ def insert_customer(customer: dict) -> list:
         "Accept": "application/json",
         "Prefer": "return=representation",
     }
-    body = json.dumps([customer]).encode("utf-8")
-    req = request.Request(url, data=body, headers=headers, method="POST")
     try:
-        with request.urlopen(req, timeout=30) as resp:
-            raw = resp.read()
-    except urllib.error.HTTPError as e:
-        err_body = e.read().decode("utf-8", errors="replace")
-        raise RuntimeError(f"Supabase error ({e.code}): {err_body}") from e
-    except urllib.error.URLError as e:
+        resp = requests.post(
+            url,
+            headers=headers,
+            json=[customer],
+            timeout=30,
+        )
+    except requests.exceptions.RequestException as e:
         raise RuntimeError(
-            f"Cannot reach Supabase at {SUPABASE_URL}. Check SUPABASE_URL and network/DNS. {e}"
+            f"Cannot reach Supabase at {url}. Check SUPABASE_URL and network/DNS. {e}"
         ) from e
-    if not raw:
+    if resp.status_code >= 400:
+        raise RuntimeError(
+            f"Supabase error ({resp.status_code}): {resp.text}"
+        )
+    if not resp.content:
         return []
-    data = json.loads(raw.decode("utf-8"))
+    try:
+        data = resp.json()
+    except json.JSONDecodeError:
+        return []
     return data if isinstance(data, list) else [data]
 
 
@@ -674,30 +683,30 @@ def fetch_customers_supabase_list() -> list:
     """Return list of dict rows from Supabase customers, newest first."""
     if not supabase_is_configured():
         return []
+    base = str(SUPABASE_URL).strip().rstrip("/")
     read_headers = {
         "apikey": SUPABASE_KEY,
         "Authorization": f"Bearer {SUPABASE_KEY}",
         "Accept": "application/json",
     }
-    raw: Optional[bytes] = None
+    raw_text: Optional[str] = None
     for path in (
         "/rest/v1/customers?select=*&order=created_at.desc&limit=500",
         "/rest/v1/customers?select=*&limit=500",
     ):
         try:
-            url = f"{SUPABASE_URL}{path}"
-            req = request.Request(url, headers=read_headers, method="GET")
-            with request.urlopen(req, timeout=30) as resp:
-                if resp.status != 200:
-                    continue
-                raw = resp.read()
+            url = "".join(f"{base}{path}".split())
+            resp = requests.get(url, headers=read_headers, timeout=30)
+            if resp.status_code != 200:
+                continue
+            raw_text = resp.text
             break
-        except Exception:
+        except requests.exceptions.RequestException:
             continue
-    if raw is None:
+    if raw_text is None:
         return []
     try:
-        data = json.loads(raw.decode("utf-8")) if raw else []
+        data = json.loads(raw_text) if raw_text else []
         return list(data) if isinstance(data, list) else []
     except json.JSONDecodeError:
         return []
@@ -707,24 +716,23 @@ def delete_supabase_customer_by_id(customer_id: str) -> None:
     """Delete one row from Supabase customers by primary key id (PostgREST)."""
     if not supabase_is_configured() or not customer_id:
         return
+    base = str(SUPABASE_URL).strip().rstrip("/")
     cid = urllib.parse.quote(str(customer_id), safe="")
-    url = f"{SUPABASE_URL}/rest/v1/customers?id=eq.{cid}"
+    url = "".join(f"{base}/rest/v1/customers?id=eq.{cid}".split())
     headers = {
         "apikey": SUPABASE_KEY,
         "Authorization": f"Bearer {SUPABASE_KEY}",
         "Accept": "application/json",
     }
-    req = request.Request(url, headers=headers, method="DELETE")
     try:
-        with request.urlopen(req, timeout=30) as resp:
-            status = resp.status
-            raw = resp.read()
-    except urllib.error.HTTPError as e:
-        status = e.code
-        raw = e.read()
+        resp = requests.delete(url, headers=headers, timeout=30)
+        status = resp.status_code
+        raw = resp.content
+    except requests.exceptions.RequestException as e:
+        raise RuntimeError(f"Supabase delete request failed: {e}") from e
     if status not in (200, 201, 204):
         try:
-            err_txt = raw.decode("utf-8")
+            err_txt = raw.decode("utf-8") if raw else resp.text
         except Exception:
             err_txt = str(raw)
         raise RuntimeError(f"Supabase delete failed ({status}): {err_txt}")
