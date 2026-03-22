@@ -4,7 +4,8 @@ import os
 import re
 import sqlite3
 import urllib.error
-import urllib.request
+import urllib.parse
+from urllib import request
 from datetime import datetime
 from pathlib import Path
 from typing import Optional, Tuple
@@ -15,6 +16,18 @@ import streamlit as st
 
 BASE_DIR = Path(__file__).resolve().parent
 DB_PATH = BASE_DIR / "business.db"
+
+try:
+    from dotenv import load_dotenv
+
+    load_dotenv(BASE_DIR / ".env")
+except ImportError:
+    pass
+
+SUPABASE_URL = (os.environ.get("SUPABASE_URL") or "").strip().rstrip("/")
+SUPABASE_KEY = (
+    os.environ.get("SUPABASE_ANON_KEY") or os.environ.get("SUPABASE_KEY") or ""
+).strip()
 
 CURRENCY_SYMBOL = "$"
 
@@ -338,11 +351,11 @@ def fetch_viacep_address(cep: str) -> Tuple[Optional[dict], Optional[str]]:
         return None, "CEP must have exactly 8 digits."
     url = f"https://viacep.com.br/ws/{digits}/json/"
     try:
-        req = urllib.request.Request(
+        req = request.Request(
             url,
             headers={"User-Agent": "ALIEH-management/1.0"},
         )
-        with urllib.request.urlopen(req, timeout=12) as resp:
+        with request.urlopen(req, timeout=12) as resp:
             body = resp.read().decode("utf-8")
         data = json.loads(body)
         if data.get("erro"):
@@ -434,6 +447,14 @@ def find_customer_duplicate(
     return None
 
 
+def _sqlite_safe_rollback(conn: sqlite3.Connection) -> None:
+    """Use API rollback; avoid OperationalError from raw ROLLBACK when no txn is active."""
+    try:
+        conn.rollback()
+    except sqlite3.OperationalError:
+        pass
+
+
 def insert_customer_row(
     name: str,
     cpf: Optional[str],
@@ -458,7 +479,7 @@ def insert_customer_row(
             dup = find_customer_duplicate(conn, cpf or "", phone or "", None)
             if dup:
                 kind, row = dup
-                conn.execute("ROLLBACK;")
+                _sqlite_safe_rollback(conn)
                 label = "CPF" if kind == "cpf" else "phone number"
                 raise ValueError(
                     f"Duplicate {label}: already used by customer **{row['customer_code']}** — {row['name']}."
@@ -495,7 +516,7 @@ def insert_customer_row(
             conn.execute("COMMIT;")
             return code
         except Exception:
-            conn.execute("ROLLBACK;")
+            _sqlite_safe_rollback(conn)
             raise
 
 
@@ -523,7 +544,7 @@ def update_customer_row(
             dup = find_customer_duplicate(conn, cpf or "", phone or "", customer_id)
             if dup:
                 kind, row = dup
-                conn.execute("ROLLBACK;")
+                _sqlite_safe_rollback(conn)
                 label = "CPF" if kind == "cpf" else "phone number"
                 raise ValueError(
                     f"Duplicate {label}: already used by customer **{row['customer_code']}** — {row['name']}."
@@ -556,7 +577,7 @@ def update_customer_row(
             )
             conn.execute("COMMIT;")
         except Exception:
-            conn.execute("ROLLBACK;")
+            _sqlite_safe_rollback(conn)
             raise
 
 
@@ -571,6 +592,118 @@ def fetch_customers_ordered() -> list:
             ORDER BY CAST(customer_code AS INTEGER);
             """
         ).fetchall()
+
+
+def supabase_is_configured() -> bool:
+    return bool(SUPABASE_URL and SUPABASE_KEY)
+
+
+def insert_customer(customer: dict) -> list:
+    """
+    POST to {SUPABASE_URL}/rest/v1/customers with apikey, Bearer, Content-Type,
+    Prefer: return=representation. Returns parsed JSON (inserted rows). No customer_code.
+    """
+    if not SUPABASE_URL or not SUPABASE_KEY:
+        raise RuntimeError(
+            "SUPABASE_URL and SUPABASE_KEY must be set (e.g. in .env)."
+        )
+    url = f"{SUPABASE_URL}/rest/v1/customers"
+    headers = {
+        "apikey": SUPABASE_KEY,
+        "Authorization": f"Bearer {SUPABASE_KEY}",
+        "Content-Type": "application/json",
+        "Accept": "application/json",
+        "Prefer": "return=representation",
+    }
+    body = json.dumps([customer]).encode("utf-8")
+    req = request.Request(url, data=body, headers=headers, method="POST")
+    try:
+        with request.urlopen(req, timeout=30) as resp:
+            raw = resp.read()
+    except urllib.error.HTTPError as e:
+        err_body = e.read().decode("utf-8", errors="replace")
+        raise RuntimeError(f"Supabase error ({e.code}): {err_body}") from e
+    if not raw:
+        return []
+    data = json.loads(raw.decode("utf-8"))
+    return data if isinstance(data, list) else [data]
+
+
+def fetch_customers_supabase_list() -> list:
+    """Return list of dict rows from Supabase customers, newest first."""
+    if not supabase_is_configured():
+        return []
+    read_headers = {
+        "apikey": SUPABASE_KEY,
+        "Authorization": f"Bearer {SUPABASE_KEY}",
+        "Accept": "application/json",
+    }
+    raw: Optional[bytes] = None
+    for path in (
+        "/rest/v1/customers?select=*&order=created_at.desc&limit=500",
+        "/rest/v1/customers?select=*&limit=500",
+    ):
+        try:
+            url = f"{SUPABASE_URL}{path}"
+            req = request.Request(url, headers=read_headers, method="GET")
+            with request.urlopen(req, timeout=30) as resp:
+                if resp.status != 200:
+                    continue
+                raw = resp.read()
+            break
+        except Exception:
+            continue
+    if raw is None:
+        return []
+    try:
+        data = json.loads(raw.decode("utf-8")) if raw else []
+        return list(data) if isinstance(data, list) else []
+    except json.JSONDecodeError:
+        return []
+
+
+def delete_supabase_customer_by_id(customer_id: str) -> None:
+    """Delete one row from Supabase customers by primary key id (PostgREST)."""
+    if not supabase_is_configured() or not customer_id:
+        return
+    cid = urllib.parse.quote(str(customer_id), safe="")
+    url = f"{SUPABASE_URL}/rest/v1/customers?id=eq.{cid}"
+    headers = {
+        "apikey": SUPABASE_KEY,
+        "Authorization": f"Bearer {SUPABASE_KEY}",
+        "Accept": "application/json",
+    }
+    req = request.Request(url, headers=headers, method="DELETE")
+    try:
+        with request.urlopen(req, timeout=30) as resp:
+            status = resp.status
+            raw = resp.read()
+    except urllib.error.HTTPError as e:
+        status = e.code
+        raw = e.read()
+    if status not in (200, 201, 204):
+        try:
+            err_txt = raw.decode("utf-8")
+        except Exception:
+            err_txt = str(raw)
+        raise RuntimeError(f"Supabase delete failed ({status}): {err_txt}")
+
+
+def init_cust_edit_session(r: sqlite3.Row, cid: int) -> None:
+    """Load customer row into Streamlit session keys for the edit form."""
+    st.session_state[f"cust_edit_name_{cid}"] = r["name"] or ""
+    st.session_state[f"cust_edit_cpf_{cid}"] = r["cpf"] or ""
+    st.session_state[f"cust_edit_rg_{cid}"] = r["rg"] or ""
+    st.session_state[f"cust_edit_phone_{cid}"] = r["phone"] or ""
+    st.session_state[f"cust_edit_email_{cid}"] = r["email"] or ""
+    st.session_state[f"cust_edit_instagram_{cid}"] = r["instagram"] or ""
+    st.session_state[f"cust_edit_cep_{cid}"] = r["zip_code"] or ""
+    st.session_state[f"cust_edit_street_{cid}"] = r["street"] or ""
+    st.session_state[f"cust_edit_number_{cid}"] = r["number"] or ""
+    st.session_state[f"cust_edit_neighborhood_{cid}"] = r["neighborhood"] or ""
+    st.session_state[f"cust_edit_city_{cid}"] = r["city"] or ""
+    st.session_state[f"cust_edit_state_{cid}"] = r["state"] or ""
+    st.session_state[f"cust_edit_country_{cid}"] = r["country"] or ""
 
 
 def peek_next_customer_code_preview() -> str:
@@ -3812,33 +3945,17 @@ def main():
         st.markdown("### Customers")
         st.caption(
             "Register customers with optional **ViaCEP** address lookup. "
-            "**Customer code** is a 5-digit auto ID (not editable). "
-            "Saving is blocked if **CPF** or **phone** (digits) already exists for another customer."
+            "**Save customer** inserts into **Supabase** `customers`. "
+            "`customer_code` is generated in the database — do not enter it in the form."
         )
-        try:
-            preview = peek_next_customer_code_preview()
-        except Exception:
-            preview = "—"
-        st.info(
-            f"Next customer code on save: **{preview}** (preview only — assigned when you save)."
-        )
+        if not supabase_is_configured():
+            st.warning(
+                "Supabase is not configured. Set **SUPABASE_URL** and **SUPABASE_KEY** (or **SUPABASE_ANON_KEY**) in `.env`."
+            )
+        else:
+            st.caption("New customers are saved only to **Supabase**.")
 
         tab_reg, tab_edit = st.tabs(["Register", "Edit customer"])
-
-        def _init_cust_edit_session(r: sqlite3.Row, cid: int) -> None:
-            st.session_state[f"cust_edit_name_{cid}"] = r["name"] or ""
-            st.session_state[f"cust_edit_cpf_{cid}"] = r["cpf"] or ""
-            st.session_state[f"cust_edit_rg_{cid}"] = r["rg"] or ""
-            st.session_state[f"cust_edit_phone_{cid}"] = r["phone"] or ""
-            st.session_state[f"cust_edit_email_{cid}"] = r["email"] or ""
-            st.session_state[f"cust_edit_instagram_{cid}"] = r["instagram"] or ""
-            st.session_state[f"cust_edit_cep_{cid}"] = r["zip_code"] or ""
-            st.session_state[f"cust_edit_street_{cid}"] = r["street"] or ""
-            st.session_state[f"cust_edit_number_{cid}"] = r["number"] or ""
-            st.session_state[f"cust_edit_neighborhood_{cid}"] = r["neighborhood"] or ""
-            st.session_state[f"cust_edit_city_{cid}"] = r["city"] or ""
-            st.session_state[f"cust_edit_state_{cid}"] = r["state"] or ""
-            st.session_state[f"cust_edit_country_{cid}"] = r["country"] or ""
 
         with tab_reg:
             st.markdown("#### Register new customer")
@@ -3918,8 +4035,8 @@ def main():
                 reg_submitted = st.form_submit_button("Save customer", type="primary")
 
             if reg_submitted:
-                name_val = (st.session_state.get("cust_reg_name") or "").strip()
-                if not name_val:
+                name = (st.session_state.get("cust_reg_name") or "").strip()
+                if not name:
                     st.error("Name is required.")
                 else:
                     cep_digits = sanitize_cep_digits(
@@ -3930,57 +4047,63 @@ def main():
                             "If CEP is filled, it must have exactly 8 digits (valid for lookup)."
                         )
                     else:
-                        cpf_raw = st.session_state.get("cust_reg_cpf", "")
-                        cpf_norm = normalize_cpf_digits(cpf_raw)
-                        if cpf_norm and not validate_cpf_br(cpf_norm):
+                        cpf = normalize_cpf_digits(
+                            st.session_state.get("cust_reg_cpf", "")
+                        )
+                        if cpf and not validate_cpf_br(cpf):
                             st.error("CPF is invalid (check digits).")
                         elif not validate_email_optional(
                             st.session_state.get("cust_reg_email", "")
                         ):
                             st.error("Email format is invalid.")
                         else:
-                            phone_norm = normalize_phone_digits(
+                            rg = (st.session_state.get("cust_reg_rg") or "").strip() or None
+                            phone = normalize_phone_digits(
                                 st.session_state.get("cust_reg_phone", "")
                             )
+                            email = (
+                                st.session_state.get("cust_reg_email") or ""
+                            ).strip() or None
+                            instagram = (
+                                st.session_state.get("cust_reg_instagram") or ""
+                            ).strip() or None
+                            cep = cep_digits if cep_digits else None
+                            street = (
+                                st.session_state.get("cust_reg_street") or ""
+                            ).strip() or None
+                            number = (
+                                st.session_state.get("cust_reg_number") or ""
+                            ).strip() or None
+                            neighborhood = (
+                                st.session_state.get("cust_reg_neighborhood") or ""
+                            ).strip() or None
+                            city = (
+                                st.session_state.get("cust_reg_city") or ""
+                            ).strip() or None
+                            state = (
+                                st.session_state.get("cust_reg_state") or ""
+                            ).strip() or None
+                            country = (
+                                st.session_state.get("cust_reg_country") or ""
+                            ).strip() or None
+                            customer = {
+                                "name": name,
+                                "cpf": cpf if cpf else None,
+                                "rg": rg,
+                                "phone": phone if phone else None,
+                                "email": email,
+                                "instagram": instagram,
+                                "cep": cep,
+                                "street": street,
+                                "number": number,
+                                "neighborhood": neighborhood,
+                                "city": city,
+                                "state": state,
+                                "country": country,
+                            }
                             try:
-                                new_code = insert_customer_row(
-                                    name=name_val,
-                                    cpf=cpf_norm if cpf_norm else None,
-                                    rg=(st.session_state.get("cust_reg_rg") or "").strip()
-                                    or None,
-                                    phone=phone_norm if phone_norm else None,
-                                    email=(st.session_state.get("cust_reg_email") or "").strip()
-                                    or None,
-                                    instagram=(
-                                        st.session_state.get("cust_reg_instagram") or ""
-                                    ).strip()
-                                    or None,
-                                    zip_code=cep_digits if cep_digits else None,
-                                    street=(
-                                        st.session_state.get("cust_reg_street") or ""
-                                    ).strip()
-                                    or None,
-                                    number=(
-                                        st.session_state.get("cust_reg_number") or ""
-                                    ).strip()
-                                    or None,
-                                    neighborhood=(
-                                        st.session_state.get("cust_reg_neighborhood") or ""
-                                    ).strip()
-                                    or None,
-                                    city=(st.session_state.get("cust_reg_city") or "").strip()
-                                    or None,
-                                    state=(st.session_state.get("cust_reg_state") or "").strip()
-                                    or None,
-                                    country=(
-                                        st.session_state.get("cust_reg_country") or ""
-                                    ).strip()
-                                    or None,
-                                )
-                            except ValueError as e:
-                                st.error(str(e))
-                            else:
-                                st.success(f"Customer **{new_code}** saved.")
+                                insert_customer(customer)
+                                st.success("Customer saved successfully!")
                                 for k in (
                                     "cust_reg_cep",
                                     "cust_reg_street",
@@ -3998,27 +4121,51 @@ def main():
                                 ):
                                     st.session_state.pop(k, None)
                                 st.rerun()
+                            except Exception as e:
+                                st.error(f"Error: {e}")
 
             st.divider()
             st.markdown("#### All customers")
-            all_cust = fetch_customers_ordered()
-            if not all_cust:
-                st.caption("No customers yet.")
+            if supabase_is_configured():
+                supa_rows = fetch_customers_supabase_list()
+                if not supa_rows:
+                    st.caption("No customers in Supabase yet.")
+                else:
+                    df_c = pd.DataFrame(
+                        [
+                            {
+                                "id": r.get("id"),
+                                "Code": r.get("customer_code") or "—",
+                                "Name": r.get("name"),
+                                "CPF": r.get("cpf") or "—",
+                                "Phone": r.get("phone") or "—",
+                                "City": r.get("city") or "—",
+                                "CEP": r.get("cep") or "—",
+                                "Updated": r.get("updated_at") or r.get("created_at") or "—",
+                            }
+                            for r in supa_rows
+                        ]
+                    )
+                    st.dataframe(df_c, width="stretch", hide_index=True)
             else:
-                df_c = pd.DataFrame(
-                    [
-                        {
-                            "Code": r["customer_code"],
-                            "Name": r["name"],
-                            "CPF": r["cpf"] or "—",
-                            "Phone": r["phone"] or "—",
-                            "City": r["city"] or "—",
-                            "Updated": r["updated_at"] or "—",
-                        }
-                        for r in all_cust
-                    ]
-                )
-                st.dataframe(df_c, width="stretch", hide_index=True)
+                all_cust = fetch_customers_ordered()
+                if not all_cust:
+                    st.caption("No customers yet (local database).")
+                else:
+                    df_c = pd.DataFrame(
+                        [
+                            {
+                                "Code": r["customer_code"],
+                                "Name": r["name"],
+                                "CPF": r["cpf"] or "—",
+                                "Phone": r["phone"] or "—",
+                                "City": r["city"] or "—",
+                                "Updated": r["updated_at"] or "—",
+                            }
+                            for r in all_cust
+                        ]
+                    )
+                    st.dataframe(df_c, width="stretch", hide_index=True)
 
         with tab_edit:
             st.markdown("#### Edit customer")
@@ -4036,7 +4183,7 @@ def main():
 
                 if st.session_state.get("cust_edit_pick_id") != cid:
                     st.session_state["cust_edit_pick_id"] = cid
-                    _init_cust_edit_session(row, cid)
+                    init_cust_edit_session(row, cid)
 
                 cep_row_e = st.columns([3, 1])
                 with cep_row_e[0]:
