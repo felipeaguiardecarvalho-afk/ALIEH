@@ -1,4 +1,5 @@
 import json
+import logging
 import math
 import os
 import re
@@ -24,10 +25,15 @@ try:
 except ImportError:
     pass
 
-SUPABASE_URL = (os.environ.get("SUPABASE_URL") or "").strip().rstrip("/")
-SUPABASE_KEY = (
-    os.environ.get("SUPABASE_ANON_KEY") or os.environ.get("SUPABASE_KEY") or ""
-).strip()
+# Supabase REST (PostgREST): one line per variable in .env; no line breaks inside values.
+SUPABASE_URL = (os.getenv("SUPABASE_URL") or "").strip().rstrip("/")
+SUPABASE_KEY = (os.getenv("SUPABASE_ANON_KEY") or os.getenv("SUPABASE_KEY") or "").strip()
+
+_logger = logging.getLogger(__name__)
+if not SUPABASE_URL or not SUPABASE_KEY:
+    _logger.warning(
+        "Supabase environment variables not loaded (SUPABASE_URL and/or SUPABASE_ANON_KEY missing)."
+    )
 
 CURRENCY_SYMBOL = "$"
 
@@ -598,15 +604,18 @@ def supabase_is_configured() -> bool:
     return bool(SUPABASE_URL and SUPABASE_KEY)
 
 
+def require_supabase_env() -> None:
+    """Raise if Supabase URL/key are missing (no secrets logged)."""
+    if not SUPABASE_URL or not SUPABASE_KEY:
+        raise RuntimeError("Supabase environment variables not loaded")
+
+
 def insert_customer(customer: dict) -> list:
     """
     POST to {SUPABASE_URL}/rest/v1/customers with apikey, Bearer, Content-Type,
     Prefer: return=representation. Returns parsed JSON (inserted rows). No customer_code.
     """
-    if not SUPABASE_URL or not SUPABASE_KEY:
-        raise RuntimeError(
-            "SUPABASE_URL and SUPABASE_KEY must be set (e.g. in .env)."
-        )
+    require_supabase_env()
     url = f"{SUPABASE_URL}/rest/v1/customers"
     headers = {
         "apikey": SUPABASE_KEY,
