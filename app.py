@@ -49,6 +49,7 @@ from utils.validators import (
     validate_cpf_br,
     validate_email_optional,
 )
+import psycopg
 import streamlit as st
 
 from database.connection import maybe_run_periodic_database_health
@@ -127,6 +128,25 @@ from services.sales_service import fetch_recent_sales_for_ui, record_sale
 from utils.painel_dashboard import render_painel_executivo
 
 _logger = logging.getLogger(__name__)
+
+
+def test_db_connection():
+    """Debug temporário: valida Postgres via DATABASE_URL nos Secrets (Streamlit Cloud)."""
+    try:
+        conn = psycopg.connect(
+            st.secrets["DATABASE_URL"],
+            prepare_threshold=0,
+        )
+        try:
+            with conn.cursor() as cur:
+                cur.execute("SELECT current_database(), current_user;")
+                result = cur.fetchone()
+            return result
+        finally:
+            conn.close()
+    except Exception as e:
+        return str(e)
+
 
 # Navegação (rótulos em português — também usados nos `if page == …`)
 PAGE_PRODUTOS = "Produtos"
@@ -517,6 +537,9 @@ def _render_uat_manual_checklist_page() -> None:
 
 def main():
     st.set_page_config(page_title="ALIEH — Gestão", layout="wide")
+    st.subheader("DB Connection Debug")
+    result = test_db_connection()
+    st.write(result)
     run_database_init()
     register_sqlite_full_backup_atexit()
     run_startup_sqlite_full_backup_once()
