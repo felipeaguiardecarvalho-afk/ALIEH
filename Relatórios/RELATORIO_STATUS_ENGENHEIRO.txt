@@ -1,7 +1,8 @@
 ================================================================================
 RELATÓRIO DE STATUS — ALIEH management (engenheiro)
 ================================================================================
-Actualização: Abril 2026 (revisão — pooler Supabase/PgBouncer, migração, testes 75)
+Actualização: Abril 2026 (Streamlit Cloud; SQLite multi-path; pooler prepare_threshold;
+    DISTINCT+ORDER BY Postgres; production_readiness_check; 76 collect / 75 suíte habitual)
 Âmbito: ambiente, Postgres/Supabase, SQLite, schema, logs, sombra, testes
 Nota: sem URIs nem passwords; credenciais apenas .env / secrets / CI.
 ================================================================================
@@ -55,10 +56,26 @@ RESUMO EXECUTIVO
   Ficheiros: database/config.py, database/connection.py
 
   • Postgres (get_postgres_conn): DSN com sslmode=require quando ausente; hostaddr IPv4
-    via gethostbyname; prepare_threshold=0; autocommit=True; após ligar: DISCARD ALL,
+    via gethostbyname; prepare_threshold=0 no connect e reatribuição explícita
+    conn.prepare_threshold = 0 após abrir (mitiga DuplicatePreparedStatement com pooler);
+    autocommit=True; após ligar: DISCARD ALL,
     SET SESSION CHARACTERISTICS AS TRANSACTION READ WRITE; cursores por defeito binary=False;
     log "PgBouncer safe mode enabled (no prepared statements)". Transacções multi-comando
     continuam com conn.transaction() (schema_apply, migração, repositórios).
+
+  • SQLite (DB_PATH): _resolve_sqlite_data_dir() — tenta /data; se PermissionError (ex. Streamlit
+    Cloud), .alieh_data na raiz do repo; senão tempfile. get_conn() faz mkdir sobre SQLITE_DATA_DIR
+    antes de abrir. .alieh_data/ no .gitignore.
+
+  • fetch_product_search_attribute_options (query_repository): SELECT DISTINCT com ORDER BY
+    case-insensitive em Postgres via subquery externa (evita UndefinedColumn em alias interno).
+
+  • streamlit_app/app.py: ligação psycopg com prepare_threshold=0 e cursor binary=False (paridade
+    pooler); gráfico Plotly com width="stretch".
+
+  • Porta operacional CLI: python -m database.production_readiness_check — validação ENV + tenant
+    prodchk_* + serviços + cleanup (readiness_probe_repository, fetch_sale_row_by_code). Ver
+    Relatórios/RELATORIO_PRODUCTION_READINESS_CHECK.txt.
 
   • Selecção: DB_PROVIDER explícito ou automático (DATABASE_URL / get_database_url
     com segredos Streamlit; cadeia get_postgres_dsn com SUPABASE_DB_URL, etc.).
@@ -139,12 +156,13 @@ RESUMO EXECUTIVO
 
 7. TESTES
 --------------------------------------------------------------------------------
-  • Suite local: pytest tests/ — 75 passed (ex.: pytest tests/ -q --ignore=tests/test_postgres_integration.py);
-    fixtures de backup/concorrência/baixa manual definem DB_PROVIDER=sqlite para isolamento.
+  • Suite: 76 testes collectados; 75 passed com integração opt-out (ex.: pytest tests/ -q
+    --ignore=tests/test_postgres_integration.py); fixtures de backup/concorrência/baixa manual
+    definem DB_PROVIDER=sqlite para isolamento quando há DATABASE_URL no ambiente.
 
-  • Integração Postgres real: tests/test_postgres_integration.py
+  • Integração Postgres real: tests/test_postgres_integration.py (1 caso)
       ALIEH_PG_INTEGRATION=1 e DATABASE_URL — fluxo produto/cliente/venda/leitura
-      com tenant isolado + teardown; não corre por defeito.
+      com tenant isolado + teardown SQL; não corre por defeito.
 
 
 8. SAÚDE / CONNECTIVIDADE
@@ -177,6 +195,10 @@ RESUMO EXECUTIVO
   [ ] health_check no mesmo ambiente que produção.
 
   [ ] .env.example / secrets sem valores reais; RLS/políticas Supabase revistas.
+
+  [ ] Streamlit Cloud: DATABASE_URL válido (sem espaços no host); repo privado com permissão
+      da app GitHub Streamlit; secrets auth_username/auth_password ou users na BD; Main file
+      path app.py (ALIEH completa) vs streamlit_app/app.py (dashboard só métricas).
 
 
 ================================================================================

@@ -258,7 +258,10 @@ def get_conn() -> sqlite3.Connection:
     _log_using_database_once("sqlite")
     global _first_sqlite_connection_log_done
     # Nova conexão por uso; Streamlit pode executar código em várias threads.
-    _ensure_sqlite_data_dir()
+    try:
+        SQLITE_DATA_DIR.mkdir(parents=True, exist_ok=True)
+    except (PermissionError, OSError):
+        pass
     try:
         conn = sqlite3.connect(
             str(DB_PATH),
@@ -439,6 +442,8 @@ def get_postgres_conn(*, silent_probe: bool = False) -> psycopg.Connection:
             connect_kw["hostaddr"] = hostaddr
     try:
         conn = psycopg.connect(dsn, **connect_kw)
+        # Reforço: alguns edge cases com pooler ignoram o kwarg na abertura.
+        conn.prepare_threshold = 0
     except (psycopg.Error, OSError) as exc:
         _logger.error(
             "PostgreSQL connection FAILED: %s - %s | repr=%r",

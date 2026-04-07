@@ -3,7 +3,8 @@ RELATÓRIO TÉCNICO PARA AUDITORIA — PREPARAÇÃO PARA SUPABASE / POSTGRESQL
 Projeto: ALIEH management (aplicação Streamlit + camada database)
 ================================================================================
 
-Data de elaboração (referência do código-base): Abril 2026 (actualização: pooler, 75 testes)
+Data de elaboração (referência do código-base): Abril 2026 (pooler reforçado; SQLite Cloud;
+    DISTINCT/order; readiness CLI; 76/75 testes)
 Tipo de documento: relatório minucioso para auditor interno/externo, com foco em
   preparação técnica para hospedagem da base de dados em Supabase (PostgreSQL
   gerido), continuidade operacional, riscos residuais e evidências no código.
@@ -99,10 +100,22 @@ lacunas e trabalho ainda necessário antes de produção exclusiva em Supabase.
         `get_postgres_conn()` (psycopg) consoante `get_db_provider()`.
       • **`get_postgres_conn()`** — `psycopg.connect` com `autocommit=True`,
         `prepare_threshold=0`, `sslmode` alinhado ao DSN, `row_factory=dict_row`,
-        opcional `hostaddr` (IPv4); após ligar: `DISCARD ALL`, `SET SESSION CHARACTERISTICS
+        opcional `hostaddr` (IPv4); após `connect`, reatribuição explícita
+        `conn.prepare_threshold = 0` (defesa contra DuplicatePreparedStatement em pooler);
+        após ligar: `DISCARD ALL`, `SET SESSION CHARACTERISTICS
         AS TRANSACTION READ WRITE`, patch de `cursor(..., binary=False)` por defeito; log
         «PgBouncer safe mode enabled (no prepared statements)». Blocos atómicos usam
         `conn.transaction()` (não dependem de autocommit=False na conexão global).
+      • **`database/repositories/query_repository.py`** — `fetch_product_search_attribute_options`:
+        subquery externa para compatibilizar `SELECT DISTINCT` com `ORDER BY LOWER(v)` em
+        PostgreSQL (regra de colunas no DISTINCT).
+      • **`database/connection.py`** — resolução de directório SQLite: `/data` se gravável;
+        senão `.alieh_data` na raiz do clone; senão tempfile (`_resolve_sqlite_data_dir`),
+        relevante para deploy Streamlit Community Cloud (sem PermissionError na importação).
+      • **`database/production_readiness_check.py`** + `readiness_probe_repository.py` +
+        `fetch_sale_row_by_code` (sales_repository) — verificação operacional Postgres com
+        tenant descartável e limpeza transaccional; relatório
+        `RELATORIO_PRODUCTION_READINESS_CHECK.txt`.
       • **`describe_active_database()`** — mascaramento de password em DSN
         para logs (regex sobre o URI).
   - Uso recomendado fora do pacote interno: `use_connection(None)` em
@@ -330,8 +343,8 @@ lacunas e trabalho ainda necessário antes de produção exclusiva em Supabase.
     `supabase>=2.4.0`.
 
 10.2 Testes observados (`tests/`)
-  - Suíte agregada: **75** casos com `pytest tests/` (ex.: excluir
-    `tests/test_postgres_integration.py` quando o job CI não define `ALIEH_PG_INTEGRATION`).
+  - **76** testes colectados; suíte habitual **75** com `--ignore=tests/test_postgres_integration.py`
+    quando CI não define `ALIEH_PG_INTEGRATION` (integração = **1** caso opt-in).
   - `test_sql_compat.py` — alternância `DB_PROVIDER=postgres` para `adapt_sql`.
   - `test_database_config.py` — sinónimos `supabase` → postgres, DSN, patch de
     `get_postgres_conn` (`autocommit`, `prepare_threshold`, `sslmode`, etc.).

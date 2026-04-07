@@ -8,6 +8,7 @@ SQLite, com detalhe operacional para amostragem, walkthrough, avaliação de
 risco residual e planeamento de evolução (ex.: SaaS multi-inquilino).
 
   Última actualização documental (revisão minuciosa para auditor): Abril 2026
+    (deploy Cloud: paths SQLite; pooler; auth obrigatória; 76/75 testes)
   ---------------------------------------------------------------------------
   **Arquitectura de acesso à base de dados (fachada services/)**
   - A UI principal (**app.py**) não importa **database.*** para persistência
@@ -52,12 +53,15 @@ risco residual e planeamento de evolução (ex.: SaaS multi-inquilino).
     **schedule_postgres_connectivity_probe_on_startup**: thread daemon opcional;
     **ALIEH_SKIP_POSTGRES_STARTUP_PROBE=1** desactiva. CLI: `python -m database.health_check`.
   - **database/connection.py** — `silent_probe` no probe; ligação Postgres em modo **pooler-safe**
-    (`autocommit=True`, `prepare_threshold=0`, `DISCARD ALL`, `cursor` com `binary=False` por defeito,
+    (`autocommit=True`, `prepare_threshold=0` no connect **e** reatribuição pós-connect,
+    `DISCARD ALL`, `cursor` com `binary=False` por defeito,
     IPv4 `hostaddr` quando aplicável, log «PgBouncer safe mode enabled…»). Transacções explícitas
-    com `conn.transaction()`.
+    com `conn.transaction()`. Pastas SQLite: `/data` ou `.alieh_data` ou tempfile
+    (**_resolve_sqlite_data_dir**) para evitar falha de import em ambientes sem escrita em `/data`
+    (Streamlit Cloud).
 
   **Repositório de testes automatizados (pytest)**
-  - Suite na raiz: **75** casos (comando típico: `python -m pytest tests/ -q --ignore=tests/test_postgres_integration.py`).
+  - **76** testes colectados; suíte habitual **75** (comando típico: `python -m pytest tests/ -q --ignore=tests/test_postgres_integration.py`).
     Fixtures de **backup_recovery**, **concurrent_sales** e **manual_stock_write_down** fixam
     **DB_PROVIDER=sqlite** para isolamento quando o ambiente define **DATABASE_URL**. **Roteiro sugerido**:
     (1) suíte completa; (2) `test_database_config` + `test_database_health` + **test_postgres_probe**;
@@ -66,7 +70,9 @@ risco residual e planeamento de evolução (ex.: SaaS multi-inquilino).
     **test_backup_recovery** (4), **test_concurrent_sales** (3),
     **test_database_config** (18), **test_database_health** (5), **test_postgres_probe** (7),
     **test_manual_stock_write_down** (5), **test_rbac** (22), **test_sql_compat** (2),
-    **test_sqlite_export** (2), **test_postgres_integration** (3, opt-in).
+    **test_sqlite_export** (2), **test_postgres_integration** (1, opt-in).
+  - **`python -m database.production_readiness_check`** — validação manual/CI Postgres com tenant
+    descartável (serviços + cleanup); ver **RELATORIO_PRODUCTION_READINESS_CHECK.txt**.
 
   **Documentação correlata**
   - Relatórios consolidados UAT/auditoria residem sob **Relatórios/** no
@@ -151,9 +157,11 @@ Tom: preciso, rastreável por ficheiro, função, tabela e variável de ambiente
     linhas em **users**, a app **bloqueia** (mensagem + `st.stop()`), antes de
     ecrãs de negócio.
   - Sinais de “live” alinhados a **business.db**: deploy Streamlit Cloud
-    (`/mount/src/...` em `connection.py`), **ALIEH_PRODUCTION** /
-    **ALIEH_USE_BUSINESS_DB**, entre outros (ver funções em connection e
-    app_auth).
+    (**is_public_streamlit_deploy** em **database/config** via `/mount/src/...`),
+    **ALIEH_PRODUCTION** / **ALIEH_USE_BUSINESS_DB**, **ALIEH_ENV** production|prod,
+    entre outros (ver **utils/app_auth.is_production_environment** e **connection**).
+  - Operador na Cloud: definir **DATABASE_URL** + **auth_username** / **auth_password** (ou
+    **[auth]** nos Secrets) até existirem utilizadores na BD; URL sem erros de encoding (pooler :6543).
 
   2.4 Perfis (RBAC parcial)
   - Coluna **users.role** (`admin`, `operator`, …); sessão **alieh_auth_role**.
@@ -770,7 +778,7 @@ Tom: preciso, rastreável por ficheiro, função, tabela e variável de ambiente
   (`…\ALIEH management`) e Python com dependências de **requirements.txt**
   instaladas.
 
-  - **Contagem da suíte pytest (esperado: 75 testes recolhidos; 78 com integração opcional):**
+  - **Contagem pytest (esperado: 76 colectados; 75 na suíte com --ignore=test_postgres_integration):**
         python -m pytest --collect-only -q
 
   - **Configuração, saúde e probe Postgres:**
@@ -784,6 +792,9 @@ Tom: preciso, rastreável por ficheiro, função, tabela e variável de ambiente
 
   - **Suíte completa (regressão; excluir integração Postgres se necessário):**
         python -m pytest tests/ -q --ignore=tests/test_postgres_integration.py
+
+  - **Readiness Postgres (ENV + DB_PROVIDER explícitos; tenant descartável):**
+        python -m database.production_readiness_check
 
   - **«app.py sem database» — ausência de imports directos do pacote database
     na UI principal** (resultado esperado: nenhuma linha de import ao nível do

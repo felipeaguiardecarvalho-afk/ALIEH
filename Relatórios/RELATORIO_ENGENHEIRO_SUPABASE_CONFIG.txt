@@ -2,7 +2,8 @@
 RELATÓRIO TÉCNICO — Integração Supabase / Postgres (ALIEH management)
 ================================================================================
 Emitido para: engenheiro (ambiente, base de dados, deploy, observabilidade)
-Data de referência do documento: Abril 2026 (actualização: pooler PgBouncer, testes 75)
+Data de referência do documento: Abril 2026 (pooler reforçado; SQLite Cloud; deploy Streamlit;
+    production_readiness_check; 76 collect / 75 suíte com --ignore=test_postgres_integration)
 Nota: este ficheiro não contém URIs nem passwords (credenciais ficam só em .env / secrets).
 ================================================================================
 
@@ -81,10 +82,15 @@ Nota: este ficheiro não contém URIs nem passwords (credenciais ficam só em .e
   • Timeout de ligação: DATABASE_CONNECT_TIMEOUT (segundos).
 
   • Modo compatível com pooler (get_postgres_conn): sslmode explícito no connect,
-    prepare_threshold=0, autocommit=True, DISCARD ALL + SET SESSION CHARACTERISTICS… após
+    prepare_threshold=0 (kwarg + atribuição conn.prepare_threshold = 0 após connect),
+    autocommit=True, DISCARD ALL + SET SESSION CHARACTERISTICS… após
     ligar; cursor(binary=False) por defeito; resolução IPv4 (hostaddr) quando aplicável;
     log "PgBouncer safe mode enabled (no prepared statements)". Operações atómicas usam
-    conn.transaction().
+    conn.transaction(). Clientes avulsos (ex. streamlit_app/app.py) devem repetir
+    prepare_threshold=0 (erro DuplicatePreparedStatement se omitido com Supabase :6543).
+
+  • SQLite em hosts sem escrita em /data (Streamlit Cloud): pasta .alieh_data ou tempfile;
+    ver database/connection.py (_resolve_sqlite_data_dir).
 
   • schema_apply: um cursor novo por instrução SQL dentro da mesma transacção.
 
@@ -130,12 +136,14 @@ Nota: este ficheiro não contém URIs nem passwords (credenciais ficam só em .e
 7. TESTES AUTOMATIZADOS
 --------------------------------------------------------------------------------
 
-  • pytest tests/ — 75 testes na suíte completa (excluir test_postgres_integration por
-    defeito se opt-in); fixtures críticos fixam DB_PROVIDER=sqlite quando o ambiente tem
-    DATABASE_URL.
+  • pytest tests/ — 76 colectados; 75 na suíte habitual (--ignore=tests/test_postgres_integration.py);
+    fixtures críticos fixam DB_PROVIDER=sqlite quando o ambiente tem DATABASE_URL.
 
-  • tests/test_postgres_integration.py — opt-in: ALIEH_PG_INTEGRATION=1 e DATABASE_URL;
+  • tests/test_postgres_integration.py — 1 teste, opt-in: ALIEH_PG_INTEGRATION=1 e DATABASE_URL;
     produto, cliente, venda, leituras com tenant isolado.
+
+  • python -m database.production_readiness_check — gate manual/CI Postgres (ver
+    Relatórios/RELATORIO_PRODUCTION_READINESS_CHECK.txt).
 
 
 8. SEGURANÇA
@@ -163,6 +171,10 @@ Nota: este ficheiro não contém URIs nem passwords (credenciais ficam só em .e
 
   [ ] Actualizar .env.example com DATABASE_URL / SUPABASE_DB_URL descritivos
       (sem valores reais).
+
+  [ ] Streamlit Cloud: Secrets DATABASE_URL (URL sem caracteres inválidos); auth legacy ou
+      users na BD; app privada com acesso Streamlit no GitHub; Main file path = app.py
+      para ALIEH completa.
 
 
 ================================================================================

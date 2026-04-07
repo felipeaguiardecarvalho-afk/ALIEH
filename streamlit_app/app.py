@@ -17,6 +17,28 @@ import psycopg
 from psycopg.rows import dict_row
 
 
+def _connect_pooler_safe(database_url: str) -> psycopg.Connection:
+    """
+    Supabase pooler (porta 6543, modo transaction) não suporta prepared statements
+    partilhados entre ligações — o default do psycopg gera DuplicatePreparedStatement.
+    """
+    conn = psycopg.connect(
+        database_url,
+        connect_timeout=20,
+        row_factory=dict_row,
+        autocommit=True,
+        prepare_threshold=0,
+    )
+    real = conn.cursor
+
+    def cursor(*args, **kwargs):  # type: ignore[no-untyped-def]
+        kwargs.setdefault("binary", False)
+        return real(*args, **kwargs)
+
+    conn.cursor = cursor  # type: ignore[method-assign]
+    return conn
+
+
 def _fmt_brl(value: float) -> str:
     """Formato monetario simples (pt-BR)."""
     txt = f"{abs(value):,.2f}"
@@ -53,12 +75,7 @@ except (KeyError, FileNotFoundError):
 
 conn: psycopg.Connection | None = None
 try:
-    conn = psycopg.connect(
-        st.secrets["DATABASE_URL"],
-        connect_timeout=20,
-        row_factory=dict_row,
-        autocommit=True,
-    )
+    conn = _connect_pooler_safe(st.secrets["DATABASE_URL"])
 except Exception as e:
     st.error(_friendly_db_error(e))
     st.stop()
@@ -122,7 +139,7 @@ try:
             margin=dict(l=20, r=20, t=40, b=20),
         )
         fig.update_xaxes(type="category", title="Dia")
-        st.plotly_chart(fig, use_container_width=True)
+        st.plotly_chart(fig, width="stretch")
 
 except Exception as e:
     st.error(_friendly_db_error(e))
