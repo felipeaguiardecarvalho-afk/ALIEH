@@ -64,10 +64,16 @@ _TABLE_SUM_RULES: dict[str, tuple[tuple[str, str], ...]] = {
 
 def _exec(conn: Any, sql: str, params: Sequence[Any] = ()) -> Any:
     sql_use = sql if is_sqlite_conn(conn) else qmarks_to_percent_s(sql)
-    return conn.execute(sql_use, params)
+    if is_sqlite_conn(conn):
+        return conn.execute(sql_use, params)
+    cur = conn.cursor()
+    cur.execute(sql_use, params, prepare=False)
+    return cur
 
 
 def _scalar_count(conn: Any, table: str) -> int | None:
+    cur = None
+    is_pg = not is_sqlite_conn(conn)
     try:
         cur = _exec(conn, f"SELECT COUNT(*) AS c FROM {table}", ())
         row = cur.fetchone()
@@ -78,9 +84,14 @@ def _scalar_count(conn: Any, table: str) -> int | None:
     except Exception as exc:
         _logger.debug("count %s: %s", table, exc)
         return None
+    finally:
+        if cur is not None and is_pg:
+            cur.close()
 
 
 def _scalar_float_v(conn: Any, sql: str) -> float | None:
+    cur = None
+    is_pg = not is_sqlite_conn(conn)
     try:
         cur = _exec(conn, sql, ())
         row = cur.fetchone()
@@ -91,9 +102,14 @@ def _scalar_float_v(conn: Any, sql: str) -> float | None:
     except Exception as exc:
         _logger.debug("float %s: %s", sql[:60], exc)
         return None
+    finally:
+        if cur is not None and is_pg:
+            cur.close()
 
 
 def _scalar_min_max_id(conn: Any, table: str) -> tuple[int | None, int | None]:
+    cur = None
+    is_pg = not is_sqlite_conn(conn)
     try:
         cur = _exec(
             conn,
@@ -112,6 +128,9 @@ def _scalar_min_max_id(conn: Any, table: str) -> tuple[int | None, int | None]:
         return int(lo) if lo is not None else None, int(hi) if hi is not None else None
     except Exception:
         return None, None
+    finally:
+        if cur is not None and is_pg:
+            cur.close()
 
 
 def _sqlite_has_table(conn: sqlite3.Connection, table: str) -> bool:
@@ -123,15 +142,17 @@ def _sqlite_has_table(conn: sqlite3.Connection, table: str) -> bool:
 
 
 def _pg_has_table(pg_conn: Any, table: str) -> bool:
-    cur = pg_conn.execute(
-        """
-        SELECT 1 FROM information_schema.tables
-        WHERE table_schema = 'public' AND table_name = %s
-        LIMIT 1;
-        """,
-        (table.lower(),),
-    )
-    return cur.fetchone() is not None
+    with pg_conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT 1 FROM information_schema.tables
+            WHERE table_schema = 'public' AND table_name = %s
+            LIMIT 1;
+            """,
+            (table.lower(),),
+            prepare=False,
+        )
+        return cur.fetchone() is not None
 
 
 def _float_match(a: float | None, b: float | None) -> bool:

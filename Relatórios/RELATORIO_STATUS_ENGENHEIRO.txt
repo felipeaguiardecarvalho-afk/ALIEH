@@ -1,29 +1,45 @@
 ================================================================================
 RELATÓRIO DE STATUS — ALIEH management (engenheiro)
 ================================================================================
-Actualização: Abril 2026 (Streamlit Cloud; SQLite multi-path; pooler prepare_threshold;
-    DISTINCT+ORDER BY Postgres; production_readiness_check; 76 collect / 75 suíte habitual)
-Âmbito: ambiente, Postgres/Supabase, SQLite, schema, logs, sombra, testes
+Actualização: Abril 2026 (PostgreSQL exclusivo na app; get_db_conn = get_postgres_conn + tratamento
+    único de falha; PgBouncer: prepare_threshold=0, sem SQL de sessão pós-connect; DSN via
+    get_database_url + Supabase; connect_timeout defeito 10 s; smoke test test_postgres_runtime;
+    72 collect / 71 suíte habitual com --ignore=test_postgres_integration)
+Âmbito: ambiente, Postgres/Supabase, SQLite só dev/migrações, schema, logs, sombra, testes
 Nota: sem URIs nem passwords; credenciais apenas .env / secrets / CI.
 ================================================================================
 
 
 RESUMO EXECUTIVO
 --------------------------------------------------------------------------------
-  • Postgres como motor principal quando há URL (DATABASE_URL / segredos / cadeia
-    Supabase); falha de ligação → fallback seguro para SQLite quando a política
-    should_use_sqlite_fallback_after_postgres_failure() o permitir (inclui
-    DATABASE_URL em os.environ mesmo com DB_PROVIDER=postgres).
+  • A aplicação usa **exclusivamente PostgreSQL** via ``database.connection.get_db_conn``.
+    Não há fallback silencioso para SQLite em falha de ligação: excepção
+    ``ConnectionError`` com mensagem ``PostgreSQL connection required but failed`` e log
+    FATAL sem credenciais.
 
-  • Logs de banco (produção): backend activo (Active database backend=…), tempos
-    de query (INFO/WARNING por limiar), erros com prévia de SQL; limiares via
-    ALIEH_DB_QUERY_INFO_MS e ALIEH_DB_QUERY_WARN_MS.
+  • ``get_postgres_conn``: DSN resolvido com ``get_database_url()`` (env + segredos Streamlit)
+    depois ``get_supabase_db_url`` / ``get_postgres_dsn``. ``psycopg.connect`` com
+    ``prepare_threshold=0`` (kwarg e ``conn.prepare_threshold = 0`` após abrir), ``sslmode``
+    no DSN (``require`` quando ausente; preserva ``verify-full`` se já no URL),
+    ``autocommit=True``, ``row_factory=dict_row``, ``connect_timeout`` (defeito **10** s;
+    override ``DATABASE_CONNECT_TIMEOUT``), ``hostaddr`` IPv4 quando aplicável. **Sem** comandos
+    SQL de sessão após ligar (não ``DISCARD ALL`` / ``SET SESSION``) — mitiga
+    ``DuplicatePreparedStatement`` no pooler. Ajuste **client-side**: ``cursor(..., binary=False)``.
+    Na primeira ligação bem-sucedida (não ``silent_probe``): INFO
+    ``PostgreSQL connection established (PgBouncer safe mode)``.
 
-  • Modo shadow (validação sem risco): replica escritos Postgres para um segundo
-    ficheiro SQLite em paralelo e regista divergências de rowcount / falhas.
+  • **SQLite** permanece para: ``init_db`` quando ``DB_PROVIDER=sqlite`` (DDL incremental),
+    export/migrações e testes — ligação via ``database.sqlite_tools.sqlite_connect_for_local_schema``
+    e path ``DB_PATH`` (``/data``, ``.alieh_data`` ou temp). Não é o motor da app em produção
+    com ``DATABASE_URL``.
+
+  • Logs de banco: backend activo, tempos de query Postgres em ``sql_compat`` (INFO/WARNING
+    por limiar), erros com prévia de SQL; limiares ``ALIEH_DB_QUERY_INFO_MS`` / ``ALIEH_DB_QUERY_WARN_MS``.
+
+  • Modo shadow: replica escritos Postgres para SQLite espelho (opcional).
 
   • Ferramentas: schema_apply, schema_validate, cross_db_parity, health_check;
-    testes de integração Postgres opt-in (ALIEH_PG_INTEGRATION).
+    integração Postgres opt-in (``ALIEH_PG_INTEGRATION``).
 
 
 1. DEPENDÊNCIAS RELEVANTES (requirements.txt)
@@ -33,172 +49,111 @@ RESUMO EXECUTIVO
 
 2. CARGA DE VARIÁVEIS (.env)
 --------------------------------------------------------------------------------
-  app.py (raiz do repo)
-    load_dotenv(Path(__file__).resolve().parent / ".env", override=False)
+  app.py (raiz): load_dotenv(..., override=False)
 
-  database/schema_apply.py
-    load_dotenv(Path(__file__).resolve().parents[1] / ".env", override=False)
+  database/schema_apply.py, cross_db_parity.py, health_check.py: load_dotenv na raiz.
 
-  database/cross_db_parity.py
-    load_dotenv na raiz (paridade SQLite × Postgres em CLI).
-
-  Log (INFO): "DATABASE_URL detected: yes" | "no" (só chave DATABASE_URL; DSN só
-  via SUPABASE_DB_URL pode manter Postgres correcto com "no").
-
-  schema_validate importa schema_apply → herda load_dotenv ao carregar o módulo.
-
-  database/health_check.py: load_dotenv na raiz do repositório (paridade com schema_apply);
-  regista "DATABASE_URL detected: yes|no". CLI: python -m database.health_check
+  Log (INFO): "DATABASE_URL detected: yes|no" (só chave DATABASE_URL; DSN via SUPABASE_DB_URL
+  pode ser válido com "no").
 
 
 3. MOTOR DE BASE DE DADOS
 --------------------------------------------------------------------------------
-  Ficheiros: database/config.py, database/connection.py
+  Ficheiros: database/config.py, database/connection.py, database/sql_compat.py,
+  database/sqlite_tools.py, database/init_db.py
 
-  • Postgres (get_postgres_conn): DSN com sslmode=require quando ausente; hostaddr IPv4
-    via gethostbyname; prepare_threshold=0 no connect e reatribuição explícita
-    conn.prepare_threshold = 0 após abrir (mitiga DuplicatePreparedStatement com pooler);
-    autocommit=True; após ligar: DISCARD ALL,
-    SET SESSION CHARACTERISTICS AS TRANSACTION READ WRITE; cursores por defeito binary=False;
-    log "PgBouncer safe mode enabled (no prepared statements)". Transacções multi-comando
-    continuam com conn.transaction() (schema_apply, migração, repositórios).
+  • **get_db_conn** → ``return get_postgres_conn()``; qualquer excepção → log
+    ``FATAL: PostgreSQL connection failed — no fallback allowed`` e
+    ``ConnectionError("PostgreSQL connection required but failed")``. Sem SQLite.
 
-  • SQLite (DB_PATH): _resolve_sqlite_data_dir() — tenta /data; se PermissionError (ex. Streamlit
-    Cloud), .alieh_data na raiz do repo; senão tempfile. get_conn() faz mkdir sobre SQLITE_DATA_DIR
-    antes de abrir. .alieh_data/ no .gitignore.
+  • **Queries Postgres:** ``db_execute`` / ``run_insert_returning_id`` usam
+    ``conn.cursor()`` + ``execute(..., prepare=False)`` — evitar ``Connection.execute`` no
+    pooler.
 
-  • fetch_product_search_attribute_options (query_repository): SELECT DISTINCT com ORDER BY
-    case-insensitive em Postgres via subquery externa (evita UndefinedColumn em alias interno).
+  • **health_check / schema_apply / production_readiness_check** e outros módulos: probes e
+    DDL com ``prepare=False`` onde aplicável (ver ficheiros).
 
-  • streamlit_app/app.py: ligação psycopg com prepare_threshold=0 e cursor binary=False (paridade
-    pooler); gráfico Plotly com width="stretch".
+  • **fetch_product_search_attribute_options:** DISTINCT + ORDER BY compatível Postgres
+    (subquery externa).
 
-  • Porta operacional CLI: python -m database.production_readiness_check — validação ENV + tenant
-    prodchk_* + serviços + cleanup (readiness_probe_repository, fetch_sale_row_by_code). Ver
-    Relatórios/RELATORIO_PRODUCTION_READINESS_CHECK.txt.
+  • **Provedor (config):** ``get_database_provider`` ainda distingue sqlite vs postgres para
+    ``init_db`` e ferramentas; não altera o facto de ``get_db_conn`` ser só Postgres.
 
-  • Selecção: DB_PROVIDER explícito ou automático (DATABASE_URL / get_database_url
-    com segredos Streamlit; cadeia get_postgres_dsn com SUPABASE_DB_URL, etc.).
+  • **init_db:** só corre DDL SQLite se ``get_db_provider() == "sqlite"``; lê ``DB_PATH`` em
+    runtime via ``connection_module.DB_PATH``. Em Postgres, assume schema já aplicado
+    (schema.sql / Supabase).
 
-  • Fallback SQLite após falha ao abrir Postgres:
-      should_use_sqlite_fallback_after_postgres_failure() em config.py
-      — automático com URL (sem DB_PROVIDER) OU DATABASE_URL não vazio em
-        os.environ;
-      — NÃO faz fallback se só SUPABASE_DB_URL (sem DATABASE_URL no env) e
-        DB_PROVIDER=postgres (erro sobe para o operador corrigir).
-
-  • Logs de arranque / intent:
-      "Primary database: PostgreSQL" (antes da primeira tentativa Postgres);
-      "Active database backend=sqlite path=…" ou
-      "Active database backend=postgresql target=…" (DSN mascarado), uma vez por processo;
-      "Fallback activated: SQLite" se fallback ocorrer.
-
-  • init_db: DDL incremental só no SQLite em processo; em Postgres assume schema
-    aplicado (ex.: schema.sql / Supabase).
+  • **Streamlit Cloud / backups SQLite:** ``utils/audit_backup`` pode usar caminho gravável
+    alternativo a ``/backups`` quando sem permissão.
 
 
 4. OBSERVABILIDADE — QUERIES E ERROS
 --------------------------------------------------------------------------------
-  • SQLite (TimedSqliteConnection): duração por execute/executemany/executescript;
-    ERROR em falhas com tempo até ao erro e prévia do SQL.
+  • SQLite (TimedSqliteConnection): duração e ERROR em falhas (caminhos dev/export).
 
-  • Postgres (database/sql_compat.py — db_execute, run_insert_returning_id): idem
-    com prefixo "postgres"; falhas com exc_info.
+  • Postgres (sql_compat): registo de duração e falhas com ``exc_info``.
 
-  • Limiares opcionais (ms): ALIEH_DB_QUERY_INFO_MS (defeito 100), ALIEH_DB_QUERY_WARN_MS
-    (defeito 1000). Consultas lentas: WARNING com etiqueta "slow".
-
-  • Nota: execute via cursor directo em Postgres (fora de db_execute) não passa
-    por este registo de duração.
+  • Limiares (ms): ALIEH_DB_QUERY_INFO_MS (100), ALIEH_DB_QUERY_WARN_MS (1000).
 
 
-5. MODO SHADOW (VALIDAÇÃO EM PARALELO)
+5. MODO SHADOW
 --------------------------------------------------------------------------------
-  database/shadow_mode.py
-
-  • Activar: ALIEH_DB_SHADOW_MODE=1 e ALIEH_DB_SHADOW_SQLITE=<caminho/.db espelho>.
-
-  • database/transactions.py: em transacções psycopg, mirrored_write_transaction
-    alinha BEGIN/COMMIT/ROLLBACK no ficheiro sombra.
-
-  • db_execute / run_insert_returning_id replicam no SQLite o SQL com "?";
-    divergência de rowcount → WARNING; excepção no SQLite → ERROR (Postgres não
-    é revertido pela sombra).
-
-  • Limitações: parâmetros dict em db_execute não são espelhados; savepoints
-    Postgres vs transacção plana SQLite — ver docstring do módulo.
+  database/shadow_mode.py — espelho SQLite em runtime **só** com os três: ALIEH_DB_SHADOW_MODE=1,
+  ALIEH_DB_SHADOW_SQLITE=caminho, e ALIEH_ALLOW_RUNTIME_SQLITE=1 (sem este último, não há
+  ``sqlite3.connect``; um WARNING por processo). Ver docstring para limitações.
 
 
 6. SCHEMA E PARIDADE
 --------------------------------------------------------------------------------
-  reset_postgres_schema() [database/schema_apply.py]
-    DROP SCHEMA public CASCADE (IF EXISTS), CREATE SCHEMA public, GRANT/OWNER; log
-    "Postgres schema resetado com sucesso". Fluxo --full-reset no migrador: reset →
-    apply_schema → migrate_all_data.
-
-  apply_schema_to_postgres() [database/schema_apply.py]
-    Transacção única; cada instrução SQL com cursor isolado (pooler); schema.sql com
-    splitter $$; CLI: python -m database.schema_apply
-
-  validate_postgres_schema() [database/schema_validate.py]
-    17 tabelas core; CLI: python -m database.schema_validate
-
-  compare_sqlite_postgres() [database/cross_db_parity.py]
-    Ligação dedicada por execução (silent_probe); public.*; cursor-based execute;
-    CLI: python -m database.cross_db_parity [--sqlite caminho absoluto] [-o …]
-
-  migrate_sqlite_to_postgres.py
-    Caminhos absolutos obrigatórios em --sqlite / ALIEH_MIGRATE_SQLITE; preflight COUNT
-    products/sales; SELECT * por tabela com validação de contagens.
-
-  list_public_base_tables(conn) [schema_apply] — partilhado.
+  reset_postgres_schema / apply_schema_to_postgres — database/schema_apply.py
+  validate_postgres_schema — database/schema_validate.py
+  compare_sqlite_postgres — database/cross_db_parity.py (ligação dedicada; cursor + prepare=False)
+  migrate_sqlite_to_postgres.py — caminhos absolutos; opcional --full-reset
 
 
 7. TESTES
 --------------------------------------------------------------------------------
-  • Suite: 76 testes collectados; 75 passed com integração opt-out (ex.: pytest tests/ -q
-    --ignore=tests/test_postgres_integration.py); fixtures de backup/concorrência/baixa manual
-    definem DB_PROVIDER=sqlite para isolamento quando há DATABASE_URL no ambiente.
+  • 72 testes colectados; suíte habitual **71 passed, 1 skipped** com
+    ``pytest tests/ -q --ignore=tests/test_postgres_integration.py``.
 
-  • Integração Postgres real: tests/test_postgres_integration.py (1 caso)
-      ALIEH_PG_INTEGRATION=1 e DATABASE_URL — fluxo produto/cliente/venda/leitura
-      com tenant isolado + teardown SQL; não corre por defeito.
+  • Fixtures que usam SQLite: patch ``database.repositories.support.get_db_conn`` ou
+    ``sqlite_connect_for_local_schema``; ``DB_PROVIDER=sqlite`` para ``init_db``.
+
+  • Integração Postgres real: tests/test_postgres_integration.py — opt-in ALIEH_PG_INTEGRATION=1.
 
 
 8. SAÚDE / CONNECTIVIDADE
 --------------------------------------------------------------------------------
-  • python -m database.health_check — SELECT 1; requer DSN no ambiente se não houver .env.
+  • python -m database.health_check — SELECT 1 via ligação dedicada (silent_probe).
 
-  • Arranque app: db_startup, probe Postgres opcional (ALIEH_SKIP_POSTGRES_STARTUP_PROBE=1).
+  • python -m database.test_postgres_runtime — smoke test pré-deploy: ``get_postgres_conn`` +
+    ``SELECT 1`` com ``prepare=False`; saída esperada ``(1,)`` (cursor com ``tuple_row`` para
+    impressão). Falha → não fazer deploy.
+
+  • Arranque: db_startup → init_db, check_database_health (Postgres), probe opcional
+    (ALIEH_SKIP_POSTGRES_STARTUP_PROBE=1).
 
 
 9. DOCUMENTAÇÃO NO REPO
 --------------------------------------------------------------------------------
-  Relatórios/RELATORIO_ENGENHEIRO_SUPABASE_CONFIG.txt — Supabase, .env, fallback, checklist.
+  Relatórios/RELATORIO_ENGENHEIRO_SUPABASE_CONFIG.txt — Supabase, .env, checklist.
 
 
 10. CHECKLIST RÁPIDO
 --------------------------------------------------------------------------------
-  [ ] .env ou CI com DATABASE_URL / SUPABASE_DB_URL conforme deploy.
+  [ ] .env / secrets com DATABASE_URL ou SUPABASE_DB_URL válido em produção.
 
-  [ ] Confirmar logs: Active database backend=… ; se fallback, "Fallback activated: SQLite".
+  [ ] Logs: sem "Fallback activated: SQLite" (fallback removido); erros FATAL se DSN/rede falharem.
 
-  [ ] Postgres novo: schema_apply → schema_validate (PASS); cutover limpo opcional:
-      migrate_sqlite_to_postgres --full-reset --sqlite <absoluto>.
+  [ ] Schema: schema_apply + schema_validate antes de cutover.
 
-  [ ] Paridade pós-migração: cross_db_parity com --sqlite absoluto do export local.
+  [ ] Pooler Supabase: ``prepare_threshold=0``; não reintroduzir DISCARD ALL pós-connect sem teste.
 
-  [ ] (Opcional) shadow mode em staging com BD sombra dedicada.
+  [ ] (Opcional) cross_db_parity, shadow mode, ALIEH_PG_INTEGRATION.
 
-  [ ] (Opcional) ALIEH_PG_INTEGRATION=1 pytest tests/test_postgres_integration.py
+  [ ] health_check e ``python -m database.test_postgres_runtime`` no mesmo ambiente que produção.
 
-  [ ] health_check no mesmo ambiente que produção.
-
-  [ ] .env.example / secrets sem valores reais; RLS/políticas Supabase revistas.
-
-  [ ] Streamlit Cloud: DATABASE_URL válido (sem espaços no host); repo privado com permissão
-      da app GitHub Streamlit; secrets auth_username/auth_password ou users na BD; Main file
-      path app.py (ALIEH completa) vs streamlit_app/app.py (dashboard só métricas).
+  [ ] Modo shadow: se usado, definir ALIEH_ALLOW_RUNTIME_SQLITE=1 apenas em dev.
 
 
 ================================================================================

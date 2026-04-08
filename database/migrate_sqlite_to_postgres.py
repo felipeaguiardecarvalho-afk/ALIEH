@@ -210,26 +210,30 @@ def _sqlite_columns(conn: sqlite3.Connection, table: str) -> list[str]:
 
 
 def _pg_table_exists(pg_conn: Any, table: str) -> bool:
-    cur = pg_conn.execute(
-        """
-        SELECT 1 FROM information_schema.tables
-        WHERE table_schema = 'public' AND table_name = %s
-        LIMIT 1;
-        """,
-        (table.lower(),),
-    )
-    return cur.fetchone() is not None
+    with pg_conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT 1 FROM information_schema.tables
+            WHERE table_schema = 'public' AND table_name = %s
+            LIMIT 1;
+            """,
+            (table.lower(),),
+            prepare=False,
+        )
+        return cur.fetchone() is not None
 
 
 def _pg_columns(pg_conn: Any, table: str) -> set[str]:
-    cur = pg_conn.execute(
-        """
-        SELECT column_name FROM information_schema.columns
-        WHERE table_schema = 'public' AND table_name = %s;
-        """,
-        (table.lower(),),
-    )
-    return {str(r["column_name"]) for r in cur.fetchall()}
+    with pg_conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT column_name FROM information_schema.columns
+            WHERE table_schema = 'public' AND table_name = %s;
+            """,
+            (table.lower(),),
+            prepare=False,
+        )
+        return {str(r["column_name"]) for r in cur.fetchall()}
 
 
 def _normalize_row(row: sqlite3.Row, colnames: Sequence[str]) -> tuple[Any, ...]:
@@ -307,11 +311,12 @@ def _migrate_one_table(
 
     for row in rows:
         vals = _normalize_row(row, s_cols)
-        cur = pg_conn.execute(sql, vals)
-        if cur.fetchone() is not None:
-            inserted += 1
-        else:
-            skipped += 1
+        with pg_conn.cursor() as cur:
+            cur.execute(sql, vals, prepare=False)
+            if cur.fetchone() is not None:
+                inserted += 1
+            else:
+                skipped += 1
 
     stats.inserted = inserted
     stats.skipped = skipped
@@ -337,32 +342,42 @@ def _sync_serial_sequences(pg_conn: Any) -> None:
 
     for tbl, col in _SEQUENCES_TO_SYNC:
         try:
-            qseq = pg_conn.execute(
-                sql.SQL("SELECT pg_get_serial_sequence({t}, {c}) AS s").format(
-                    t=sql.Literal(tbl),
-                    c=sql.Literal(col),
+            with pg_conn.cursor() as cur:
+                cur.execute(
+                    sql.SQL("SELECT pg_get_serial_sequence({t}, {c}) AS s").format(
+                        t=sql.Literal(tbl),
+                        c=sql.Literal(col),
+                    ),
+                    prepare=False,
                 )
-            ).fetchone()
+                qseq = cur.fetchone()
             seq_name = qseq["s"] if qseq else None
             if not seq_name:
                 continue
-            qmax = pg_conn.execute(
-                sql.SQL("SELECT MAX({c}) AS m FROM {t}").format(
-                    c=sql.Identifier(col),
-                    t=sql.Identifier(tbl),
+            with pg_conn.cursor() as cur:
+                cur.execute(
+                    sql.SQL("SELECT MAX({c}) AS m FROM {t}").format(
+                        c=sql.Identifier(col),
+                        t=sql.Identifier(tbl),
+                    ),
+                    prepare=False,
                 )
-            ).fetchone()
+                qmax = cur.fetchone()
             m = qmax["m"]
             if m is not None and int(m) > 0:
-                pg_conn.execute(
-                    "SELECT setval(%s, %s, true);",
-                    (seq_name, int(m)),
-                )
+                with pg_conn.cursor() as cur:
+                    cur.execute(
+                        "SELECT setval(%s, %s, true);",
+                        (seq_name, int(m)),
+                        prepare=False,
+                    )
             else:
-                pg_conn.execute(
-                    "SELECT setval(%s, 1, false);",
-                    (seq_name,),
-                )
+                with pg_conn.cursor() as cur:
+                    cur.execute(
+                        "SELECT setval(%s, 1, false);",
+                        (seq_name,),
+                        prepare=False,
+                    )
         except Exception as exc:
             _logger.debug(
                 "Sequence sync skipped for %s.%s: %s",

@@ -5,6 +5,8 @@ from __future__ import annotations
 import sqlite3
 from pathlib import Path
 
+from database.timed_sqlite import TimedSqliteConnection
+
 
 def sqlite_backup_file_to_file(src: Path, dest: Path) -> None:
     """Cópia consistente entre dois ficheiros (API ``backup``)."""
@@ -30,4 +32,12 @@ def sqlite_connect_path(
         raise ConnectionError(f"Não foi possível abrir o ficheiro SQLite {path!s}: {exc}") from exc
     if row_factory is not None:
         conn.row_factory = row_factory
+    return conn
+
+
+def sqlite_connect_for_local_schema(path: Path | str) -> sqlite3.Connection:
+    """Ligação SQLite para :func:`database.init_db.init_db` e testes locais (não é a app em produção)."""
+    conn = sqlite3.connect(str(path), timeout=30.0, factory=TimedSqliteConnection)
+    conn.row_factory = sqlite3.Row
+    conn.execute("PRAGMA foreign_keys = ON;")
     return conn

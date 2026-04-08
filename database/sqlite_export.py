@@ -25,7 +25,8 @@ from pathlib import Path
 from typing import Any
 
 from database.config import get_db_provider
-from database.connection import DB_PATH, get_db_conn
+from database.connection import DB_PATH
+from database.sqlite_tools import sqlite_connect_for_local_schema
 from utils.env_safe import STREAMLIT_CONFIG_READ_ERRORS
 
 _logger = logging.getLogger(__name__)
@@ -134,7 +135,7 @@ def export_all_data(
     tables_info: list[dict[str, Any]] = []
     table_names: list[str] = []
 
-    with get_db_conn() as conn:
+    with sqlite_connect_for_local_schema(DB_PATH) as conn:
         names = _list_user_tables(conn)
         ordered = _order_tables(names)
         sqlite_version = conn.execute("SELECT sqlite_version();").fetchone()[0]

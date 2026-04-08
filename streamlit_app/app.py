@@ -82,13 +82,19 @@ except Exception as e:
 
 try:
     with conn.cursor() as cur:
-        cur.execute("SELECT COALESCE(SUM(total), 0) AS s_total FROM sales;")
+        cur.execute(
+            "SELECT COALESCE(SUM(total), 0) AS s_total FROM sales;",
+            prepare=False,
+        )
         total_vendas = float(cur.fetchone()["s_total"] or 0)
 
-        cur.execute("SELECT COALESCE(SUM(cogs_total), 0) AS s_cogs FROM sales;")
+        cur.execute(
+            "SELECT COALESCE(SUM(cogs_total), 0) AS s_cogs FROM sales;",
+            prepare=False,
+        )
         total_cogs = float(cur.fetchone()["s_cogs"] or 0)
 
-        cur.execute("SELECT COUNT(*)::bigint AS n FROM sales;")
+        cur.execute("SELECT COUNT(*)::bigint AS n FROM sales;", prepare=False)
         num_pedidos = int(cur.fetchone()["n"] or 0)
 
     lucro_total = total_vendas - total_cogs
@@ -114,7 +120,8 @@ try:
             WHERE sold_at::timestamp >= (CURRENT_TIMESTAMP - INTERVAL '30 days')
             GROUP BY 1
             ORDER BY 1;
-            """
+            """,
+            prepare=False,
         )
         rows = cur.fetchall()
 

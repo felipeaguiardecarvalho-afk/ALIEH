@@ -9,10 +9,8 @@
 **Sobreposição explícita:** ``DB_PROVIDER`` = ``sqlite`` | ``postgres`` (ou sinónimos) —
 comportamento legado preservado.
 
-**Fallback após falha:** se o Postgres for o motor pretendido e existir ``DATABASE_URL`` no
-ambiente **ou** o modo automático tiver detectado URL (``DATABASE_URL`` / segredos sem
-``DB_PROVIDER``), uma falha ao abrir Postgres faz :func:`database.connection.get_db_conn`
-passar a SQLite e regista aviso **sem expor credenciais**. ``DB_PROVIDER=sqlite`` força só SQLite.
+**Sem fallback SQLite em produção:** :func:`database.connection.get_db_conn` usa apenas
+PostgreSQL; falhas de ligação propagam :exc:`ConnectionError`.
 
 DSN completo (Supabase, etc.): :func:`get_postgres_dsn` —
 ``SUPABASE_DB_URL``, ``DATABASE_URL``, ``POSTGRES_DSN``, ``ALIEH_DATABASE_URL`` e segredos.
@@ -35,10 +33,7 @@ _logger = logging.getLogger(__name__)
 DB_PROVIDER_ENV = "DB_PROVIDER"
 DATABASE_URL_ENV = "DATABASE_URL"
 
-# Após falha de ligação Postgres em modo automático por URL.
-_FORCE_SQLITE_AFTER_POSTGRES_FAILURE = False
 _PRIMARY_SELECTION_LOGGED = False
-_FALLBACK_SELECTION_LOGGED = False
 
 _PRODUCTION_DB_NAME = "business.db"
 _DEV_DEFAULT_DB_NAME = "businessdev.db"
@@ -144,48 +139,9 @@ def get_database_url() -> str | None:
     )
 
 
-def record_postgres_unreachable_use_sqlite_fallback() -> None:
-    """Marcar fallback persistente para SQLite após falha de Postgres (mesmo processo)."""
-    global _FORCE_SQLITE_AFTER_POSTGRES_FAILURE
-    _FORCE_SQLITE_AFTER_POSTGRES_FAILURE = True
-
-
-def is_auto_postgres_from_database_url_only() -> bool:
-    """Indica se Postgres foi inferido só por ``DATABASE_URL`` / URL em segredo (sem ``DB_PROVIDER``)."""
-    raw = (os.environ.get(DB_PROVIDER_ENV) or "").strip()
-    if raw:
-        return False
-    return bool(get_database_url())
-
-
-def should_use_sqlite_fallback_after_postgres_failure() -> bool:
-    """
-    Permite fallback para SQLite após falha de ligação Postgres.
-
-    Verdadeiro quando a intenção é Postgres «com URL» (modo automático via
-    :func:`get_database_url` ou ``DATABASE_URL`` presente em ``os.environ``), para não
-    derrubar a app se a rede/Supabase falhar. Falso se só ``SUPABASE_DB_URL`` (sem
-    ``DATABASE_URL`` em env) e ``DB_PROVIDER=postgres`` — aí o operador deve corrigir o DSN.
-    """
-    raw = (os.environ.get(DB_PROVIDER_ENV) or "").strip().lower()
-    if raw in ("sqlite", "file"):
-        return False
-    if is_auto_postgres_from_database_url_only():
-        return True
-    return bool((os.environ.get(DATABASE_URL_ENV) or "").strip())
-
-
 def get_database_provider() -> Literal["sqlite", "postgres"]:
     """Provedor efectivo: modo automático ou ``DB_PROVIDER`` explícito."""
-    global _PRIMARY_SELECTION_LOGGED, _FALLBACK_SELECTION_LOGGED
-
-    if _FORCE_SQLITE_AFTER_POSTGRES_FAILURE:
-        if not _FALLBACK_SELECTION_LOGGED:
-            _logger.info(
-                "Database selected: sqlite (PostgreSQL connection failed; using fallback)"
-            )
-            _FALLBACK_SELECTION_LOGGED = True
-        return "sqlite"
+    global _PRIMARY_SELECTION_LOGGED
 
     raw = (os.environ.get(DB_PROVIDER_ENV) or "").strip()
     if raw:

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import importlib
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -23,15 +23,26 @@ def reload_conn(monkeypatch):
     return _inner
 
 
-def test_check_database_health_returns_true_for_sqlite(
-    reload_conn, monkeypatch, tmp_path
-):
-    monkeypatch.delenv("DATABASE_URL", raising=False)
-    conn = reload_conn(DB_PROVIDER="sqlite", ALIEH_SQLITE=str(tmp_path / "health.db"))
-    assert conn.check_database_health() is True
+def test_check_database_health_returns_true_when_postgres_ok(reload_conn, monkeypatch):
+    conn_mod = reload_conn(
+        DB_PROVIDER="postgres",
+        SUPABASE_DB_URL="postgresql://u:p@localhost/db",
+    )
+
+    cur = MagicMock()
+    cur.__enter__ = MagicMock(return_value=cur)
+    cur.__exit__ = MagicMock(return_value=False)
+    cur.fetchone.return_value = {"ok": 1}
+    mock_conn = MagicMock()
+    mock_conn.__enter__ = MagicMock(return_value=mock_conn)
+    mock_conn.__exit__ = MagicMock(return_value=False)
+    mock_conn.cursor.return_value = cur
+
+    with patch.object(conn_mod, "get_db_conn", return_value=mock_conn):
+        assert conn_mod.check_database_health() is True
 
 
-def test_check_database_health_no_fallback_explicit_postgres(reload_conn, monkeypatch):
+def test_check_database_health_propagates_get_db_conn_failure(reload_conn, monkeypatch):
     conn = reload_conn(
         DB_PROVIDER="postgres",
         SUPABASE_DB_URL="postgresql://u:p@localhost/db",
@@ -41,7 +52,8 @@ def test_check_database_health_no_fallback_explicit_postgres(reload_conn, monkey
         raise RuntimeError("no db")
 
     with patch.object(conn, "get_db_conn", side_effect=boom):
-        assert conn.check_database_health() is False
+        with pytest.raises(RuntimeError, match="no db"):
+            conn.check_database_health()
 
 
 def test_maybe_periodic_skips_when_interval_zero(reload_conn, monkeypatch):
@@ -71,9 +83,9 @@ def test_maybe_periodic_respects_interval(reload_conn, monkeypatch):
 
 
 def test_run_database_init_calls_check_health(monkeypatch, tmp_path):
+    monkeypatch.setenv("DB_PROVIDER", "postgres")
+    monkeypatch.setenv("SUPABASE_DB_URL", "postgresql://u:p@localhost/db")
     monkeypatch.delenv("DATABASE_URL", raising=False)
-    monkeypatch.setenv("DB_PROVIDER", "sqlite")
-    monkeypatch.setenv("ALIEH_SQLITE", str(tmp_path / "startup.db"))
     monkeypatch.setenv("ALIEH_SKIP_POSTGRES_STARTUP_PROBE", "1")
 
     import database.config as cfg
@@ -90,7 +102,7 @@ def test_run_database_init_calls_check_health(monkeypatch, tmp_path):
 
     called: list[bool] = []
 
-    def track(**_k):
+    def track():
         called.append(True)
 
     conn_mod = importlib.import_module("database.connection")

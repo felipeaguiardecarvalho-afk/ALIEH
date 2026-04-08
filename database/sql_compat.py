@@ -1,6 +1,7 @@
 """Compatibilidade SQL SQLite ↔ PostgreSQL (placeholders e fragmentos portáveis).
 
 - Placeholders: ``?`` (SQLite) vs ``%s`` (psycopg) — usar :func:`db_execute`.
+- PostgreSQL sem placeholders adaptados: :func:`pg_execute_no_prepare` (cursor + ``prepare=False``).
 - Não altera a semântica das queries; apenas o formato de bind e pequenos fragmentos
   expostos como :func:`sql_order_ci`.
 
@@ -50,6 +51,31 @@ except ImportError:
 
 def is_sqlite_conn(conn: Any) -> bool:
     return isinstance(conn, sqlite3.Connection)
+
+
+def pg_execute_no_prepare(
+    conn: Any,
+    query: Any,
+    params: Sequence[Any] | Mapping[str, Any] | None = None,
+) -> Any:
+    """PostgreSQL apenas: ``cursor().execute(..., prepare=False)`` para compatibilidade PgBouncer.
+
+    Devolve o cursor **aberto**; o chamador deve invocar ``close()`` após ``fetch*`` ou
+    consumir o resultado por completo. ``query`` pode ser ``str`` ou composição
+    :mod:`psycopg.sql`.
+    """
+    if is_sqlite_conn(conn):
+        raise TypeError("pg_execute_no_prepare requer ligação psycopg (não SQLite)")
+    cur = conn.cursor()
+    try:
+        if params is None:
+            cur.execute(query, prepare=False)
+        else:
+            cur.execute(query, params, prepare=False)
+        return cur
+    except BaseException:
+        cur.close()
+        raise
 
 
 def qmarks_to_percent_s(sql: str) -> str:

@@ -69,7 +69,7 @@ def test_database_selected_log_postgres_url(caplog, reload_db_config, monkeypatc
     )
 
 
-def test_get_db_conn_fallback_sqlite_when_postgres_fails(
+def test_get_db_conn_raises_when_postgres_connect_fails(
     reload_db_config, monkeypatch, caplog
 ):
     import logging
@@ -83,28 +83,21 @@ def test_get_db_conn_fallback_sqlite_when_postgres_fails(
 
     importlib.reload(cfg)
     importlib.reload(conn)
-    caplog.set_level(logging.INFO)
+    caplog.set_level(logging.ERROR)
 
     def boom(*_a, **_k):
         raise psycopg.OperationalError("simulated failure")
 
     with patch.object(conn.psycopg, "connect", side_effect=boom):
-        with conn.get_db_conn() as c:
-            assert c.execute("SELECT 1").fetchone()[0] == 1
-    messages = [r.getMessage() for r in caplog.records]
-    assert any("Database selected: postgres (DATABASE_URL detected)" == m for m in messages)
+        with pytest.raises(ConnectionError, match="PostgreSQL connection required but failed"):
+            conn.get_db_conn()
     assert any(
-        "PostgreSQL connection failed" in m and "fallback" in m.lower() for m in messages
+        "FATAL: PostgreSQL connection failed — no fallback allowed" in r.getMessage()
+        for r in caplog.records
     )
-    assert any(
-        "Database selected: sqlite (PostgreSQL connection failed; using fallback)" == m
-        for m in messages
-    )
-    assert any("Primary database: PostgreSQL" in m for m in messages)
-    assert any("Fallback activated: SQLite" in m for m in messages)
 
 
-def test_get_db_conn_fallback_when_explicit_postgres_with_database_url(
+def test_get_db_conn_raises_when_explicit_postgres_with_database_url(
     reload_db_config, caplog
 ):
     import logging
@@ -118,17 +111,18 @@ def test_get_db_conn_fallback_when_explicit_postgres_with_database_url(
 
     importlib.reload(cfg)
     importlib.reload(conn)
-    caplog.set_level(logging.INFO)
+    caplog.set_level(logging.ERROR)
 
     def boom(*_a, **_k):
         raise ConnectionError("fail")
 
     with patch.object(conn.psycopg, "connect", side_effect=boom):
-        with conn.get_db_conn() as c:
-            assert c.execute("SELECT 1").fetchone()[0] == 1
-    messages = [r.getMessage() for r in caplog.records]
-    assert any("Primary database: PostgreSQL" in m for m in messages)
-    assert any("Fallback activated: SQLite" in m for m in messages)
+        with pytest.raises(ConnectionError, match="PostgreSQL connection required but failed"):
+            conn.get_db_conn()
+    assert any(
+        "FATAL: PostgreSQL connection failed — no fallback allowed" in r.getMessage()
+        for r in caplog.records
+    )
 
 
 def test_get_db_conn_no_fallback_explicit_postgres_supabase_url_only(
@@ -176,34 +170,6 @@ def test_get_postgres_dsn_from_env(reload_db_config, monkeypatch):
     assert cfg.get_supabase_db_url() == "postgresql://u:p@localhost/db"
 
 
-def test_get_conn_rejects_postgres_provider(reload_db_config):
-    reload_db_config(DB_PROVIDER="postgres")
-    import database.connection as conn
-
-    importlib.reload(conn)
-    with pytest.raises(RuntimeError, match="SQLite-only"):
-        conn.get_conn()
-
-
-def test_get_conn_sqlite_after_revert(reload_db_config, tmp_path):
-    """Com sqlite activo, get_conn abre o ficheiro configurado."""
-    reload_db_config(DB_PROVIDER="sqlite", ALIEH_SQLITE=str(tmp_path / "t.db"))
-    import database.connection as conn
-
-    importlib.reload(conn)
-    with conn.get_conn() as c:
-        assert c.execute("SELECT 1").fetchone()[0] == 1
-
-
-def test_get_db_conn_matches_sqlite_path(reload_db_config, tmp_path):
-    reload_db_config(DB_PROVIDER="sqlite", ALIEH_SQLITE=str(tmp_path / "unified.db"))
-    import database.connection as conn
-
-    importlib.reload(conn)
-    with conn.get_db_conn() as c:
-        assert c.execute("SELECT 1").fetchone()[0] == 1
-
-
 def test_get_postgres_conn_uses_supabase_url(reload_db_config, monkeypatch):
     for k in ("DATABASE_URL", "POSTGRES_DSN", "ALIEH_DATABASE_URL"):
         monkeypatch.delenv(k, raising=False)
@@ -220,7 +186,7 @@ def test_get_postgres_conn_uses_supabase_url(reload_db_config, monkeypatch):
         p.assert_called_once()
         assert p.call_args.args[0] == "postgresql://user:pass@localhost:5432/db?sslmode=require"
         assert p.call_args.kwargs.get("autocommit") is True
-        assert p.call_args.kwargs.get("connect_timeout") == 30
+        assert p.call_args.kwargs.get("connect_timeout") == 10
         assert p.call_args.kwargs.get("prepare_threshold") == 0
         assert p.call_args.kwargs.get("sslmode") == "require"
 
@@ -278,14 +244,3 @@ def test_get_postgres_conn_connect_timeout_env(reload_db_config, monkeypatch):
         assert p.call_args.kwargs.get("connect_timeout") == 45
 
 
-def test_log_using_database_sqlite(caplog, reload_db_config, tmp_path):
-    import logging
-
-    reload_db_config(DB_PROVIDER="sqlite", ALIEH_SQLITE=str(tmp_path / "logt.db"))
-    import database.connection as conn
-
-    importlib.reload(conn)
-    caplog.set_level(logging.INFO, logger=conn.__name__)
-    with conn.get_db_conn() as c:
-        assert c.execute("SELECT 1").fetchone()[0] == 1
-    assert any("Active database backend=sqlite" in r.message for r in caplog.records)

@@ -8,8 +8,10 @@ Escopo:                    Snapshot de código-fonte + suíte automatizada pytes
 Nota de localização: documentação técnica complementar e pormenorizada para o
 auditor encontra-se em **Relatórios/RELATORIO_AUDITOR_ATUALIZACAO_POS_CONTROLES.txt**
 (tratamento minucioso de camadas, Estoque, baixa manual, matriz de riscos e
-checklist). O presente ficheiro mantém o pacote de verificação e o inventário
-de testes executados.
+checklist). Actualização documental contínua (abril 2026): ligação pooler-safe
+(`prepare_threshold=0`, sem SQL de sessão pós-connect), `database.test_postgres_runtime`
+como verificação manual/CI, e relatório de engenheiro **RELATORIO_ENGENHEIRO_SUPABASE_CONFIG.txt**.
+O presente ficheiro mantém o pacote de verificação e o inventário de testes executados.
 
 --------------------------------------------------------------------------------
 1. IDENTIFICAÇÃO DO PACOTE DE CÓDIGO

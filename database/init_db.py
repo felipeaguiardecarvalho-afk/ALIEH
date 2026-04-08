@@ -24,7 +24,8 @@ import re
 from datetime import datetime
 
 from database.config import get_db_provider
-from database.connection import get_db_conn
+from database import connection as connection_module
+from database.sqlite_tools import sqlite_connect_for_local_schema
 from database.customer_sync import sync_customer_sequence_counter_from_customers
 from database.migrations import (
     backfill_sales_cogs,
@@ -46,7 +47,8 @@ def init_db() -> None:
     # Schema abaixo é SQLite-only; no Postgres aplique migrations fora (ex.: Supabase SQL).
     if get_db_provider() != "sqlite":
         return
-    with get_db_conn() as conn:
+    # ``DB_PATH`` lido em runtime (testes fazem monkeypatch em ``connection_module``).
+    with sqlite_connect_for_local_schema(connection_module.DB_PATH) as conn:
         conn.execute(
             """
             CREATE TABLE IF NOT EXISTS products (

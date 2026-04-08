@@ -1,31 +1,25 @@
-"""Ligação à base de dados.
+"""Ligação à base de dados (PostgreSQL exclusivo na aplicação).
 
-- :func:`get_db_conn` — **entrada única** recomendada: SQLite ou Postgres conforme
-  :func:`database.config.get_database_provider` (automático via ``DATABASE_URL`` ou explícito
-  ``DB_PROVIDER``; ver :mod:`database.config`).
+- :func:`get_db_conn` — **entrada única**: ligação PostgreSQL (Supabase). Não há fallback
+  para SQLite; falhas levantam :exc:`ConnectionError` após log FATAL.
 - :func:`check_database_health` / :func:`maybe_run_periodic_database_health` — ``SELECT 1`` no
   arranque (via :mod:`services.db_startup`) e opcionalmente em intervalo definido por
   ``DATABASE_HEALTH_INTERVAL_SECONDS``. A seguir, :mod:`database.health_check` agenda o probe
   Postgres em background (:func:`~database.health_check.schedule_postgres_connectivity_probe_on_startup`).
-- :func:`get_conn` — somente SQLite (usado internamente quando o provedor é sqlite).
 - :func:`get_postgres_conn` — **Postgres** (psycopg 3): lê o DSN de ``DATABASE_URL``
-  (env) quando definido; caso contrário mantém a cadeia em :mod:`database.config`.
+  via :func:`database.config.get_database_url`; caso contrário cadeia Supabase / :mod:`database.config`.
   Se o URL não incluir ``sslmode``, anexa ``sslmode=require`` (Supabase / SSL obrigatório).
   Resolve o ``host`` do DSN para IPv4 com :func:`socket.gethostbyname` e passa ``hostaddr``
   a :func:`psycopg.connect` para evitar falhas quando o SO não encaminha IPv6 correctamente.
-  ``prepare_threshold=0``, ``autocommit=True`` e ``DISCARD ALL`` na sessão para PgBouncer /
-  Supabase pooler (``DuplicatePreparedStatement``). Transacções explícitas usam ainda
-  ``conn.transaction()``. Cursores por defeito ``binary=False``. ``connect_timeout`` via env.
+  ``prepare_threshold=0``, ``autocommit=True`` — sem comandos de sessão pós-conexão (compatível
+  com PgBouncer / Supabase). Transacções explícitas usam ``conn.transaction()``. Cursores por
+  defeito ``binary=False``. ``connect_timeout`` (defeito 10 s; override ``DATABASE_CONNECT_TIMEOUT``).
 
-Na primeira ligação por processo é registado ``Active database backend=sqlite`` ou
-``backend=postgresql`` com alvo mascarado (DSN sem password).
+Na primeira ligação por processo: ``Active database backend=postgresql`` (alvo mascarado) e
+``PostgreSQL connection established (PgBouncer safe mode)``.
 
-**SQLite:** ficheiro em ``DB_PATH``. Ordem de pastas: ``/data`` (Docker) se gravável;
-senão ``.alieh_data`` na raiz do repositório (ex.: Streamlit Cloud); senão ``/tmp/...``.
-O ficheiro só é criado ao abrir a primeira ligação (:func:`database.init_db` usa ``IF NOT EXISTS``).
-
-Ligações SQLite usam :class:`database.timed_sqlite.TimedSqliteConnection` para registo de
-duração das queries (DEBUG por defeito; INFO se exceder ``SLOW_QUERY_MS``).
+**``DB_PATH``** mantém o caminho histórico do ficheiro SQLite (migrações, export) — a app
+em produção não abre SQLite via :func:`get_db_conn`.
 """
 
 from __future__ import annotations
@@ -34,40 +28,27 @@ import logging
 import os
 import re
 import socket
-import sqlite3
 import tempfile
 import time
 from pathlib import Path
-from typing import Any, Union
+from typing import Any
 from urllib.parse import parse_qs, urlparse, urlunparse
 
 import psycopg
-from psycopg.errors import DuplicatePreparedStatement, InvalidSqlStatementName
 from psycopg.rows import dict_row
 
-from database.config import (
-    get_database_provider,
-    get_postgres_dsn,
-    get_supabase_db_url,
-    record_postgres_unreachable_use_sqlite_fallback,
-    should_use_sqlite_fallback_after_postgres_failure,
-)
-from database.timed_sqlite import TimedSqliteConnection
+from database.config import get_database_url, get_postgres_dsn, get_supabase_db_url
 
 _logger = logging.getLogger(__name__)
 
-DATABASE_URL_ENV = "DATABASE_URL"
 # Segundos (ligação TCP ao servidor Postgres); limitado a intervalo seguro.
 DATABASE_CONNECT_TIMEOUT_ENV = "DATABASE_CONNECT_TIMEOUT"
 # > 0: executar :func:`check_database_health` no máximo uma vez por este intervalo (Streamlit reruns).
 DATABASE_HEALTH_INTERVAL_SECONDS_ENV = "DATABASE_HEALTH_INTERVAL_SECONDS"
 
-_first_sqlite_connection_log_done = False
 _first_postgres_connection_log_done = False
 _using_database_logged: str | None = None
 _last_periodic_health_monotonic: float = 0.0
-_primary_database_postgres_logged = False
-_fallback_to_sqlite_logged = False
 
 SQLITE_DB_FILENAME = "business.db"
 
@@ -101,10 +82,9 @@ try:
     _db_path_logged = str(DB_PATH.resolve())
 except OSError:
     _db_path_logged = str(DB_PATH)
-_logger.info("SQLite database path: %s (dir=%s)", _db_path_logged, SQLITE_DATA_DIR)
+_logger.info("SQLite reference path (migrations/tools): %s (dir=%s)", _db_path_logged, SQLITE_DATA_DIR)
 
-# Tipo de retorno unificado (SQLite Row vs Postgres dict_row).
-DbConnection = Union[sqlite3.Connection, psycopg.Connection]
+DbConnection = psycopg.Connection
 
 
 def _wrap_postgres_cursor_binary_false(conn: psycopg.Connection) -> None:
@@ -118,86 +98,28 @@ def _wrap_postgres_cursor_binary_false(conn: psycopg.Connection) -> None:
     conn.cursor = cursor  # type: ignore[method-assign]
 
 
-def _apply_pgbouncer_safe_session(conn: psycopg.Connection) -> None:
-    """
-    Limpa estado de sessão e força cursores seguros para PgBouncer (pooler Supabase :6543).
-
-    Usa ``cur.execute(..., prepare=False)`` — ``Connection.execute`` pode disparar
-    DuplicatePreparedStatement no modo transação do pooler. Se ``DISCARD ALL`` falhar
-    com esse erro, continua-se sem descarte (ligação ainda utilizável).
-    """
-    _pgbouncer_session_warn_types = (DuplicatePreparedStatement, InvalidSqlStatementName)
-    try:
-        with conn.cursor() as cur:
-            cur.execute("DISCARD ALL;", prepare=False)
-    except _pgbouncer_session_warn_types as exc:
-        _logger.warning(
-            "DISCARD ALL omitido (%s — pooler / estado de prepared); "
-            "estado de sessão pode herdar GUCs do backend.",
-            type(exc).__name__,
-        )
-    try:
-        with conn.cursor() as cur:
-            cur.execute(
-                "SET SESSION CHARACTERISTICS AS TRANSACTION READ WRITE;",
-                prepare=False,
-            )
-    except _pgbouncer_session_warn_types as exc:
-        _logger.warning(
-            "SET SESSION CHARACTERISTICS omitido (%s — pooler).",
-            type(exc).__name__,
-        )
-    _wrap_postgres_cursor_binary_false(conn)
-    _logger.info("PgBouncer safe mode enabled (no prepared statements)")
-
-
 def _log_using_database_once(kind: str) -> None:
     """Uma linha INFO por processo: backend activo e alvo seguro para diagnóstico em produção."""
     global _using_database_logged
     if _using_database_logged is None:
-        if kind == "sqlite":
-            _logger.info("Active database backend=sqlite path=%s", DB_PATH)
-        else:
-            _logger.info(
-                "Active database backend=postgresql target=%s",
-                describe_active_database(),
-            )
+        _logger.info(
+            "Active database backend=postgresql target=%s",
+            describe_active_database(),
+        )
         _using_database_logged = kind
 
 
 def _postgres_connect_timeout_seconds() -> int:
-    raw = (os.environ.get(DATABASE_CONNECT_TIMEOUT_ENV) or "30").strip()
+    raw = (os.environ.get(DATABASE_CONNECT_TIMEOUT_ENV) or "10").strip()
     try:
         n = int(raw)
         return max(1, min(n, 600))
     except ValueError:
-        return 30
-
-
-def _activate_postgres_auto_sqlite_fallback(exc: BaseException | None) -> None:
-    """Fallback SQLite após falha Postgres quando :func:`should_use_sqlite_fallback_after_postgres_failure`."""
-    global _using_database_logged, _first_postgres_connection_log_done, _fallback_to_sqlite_logged
-    label = type(exc).__name__ if exc is not None else "unknown"
-    _logger.error(
-        "PostgreSQL connection failed (%s); falling back to SQLite "
-        "(credentials not logged).",
-        label,
-    )
-    if not _fallback_to_sqlite_logged:
-        _logger.info("Fallback activated: SQLite")
-        _fallback_to_sqlite_logged = True
-    record_postgres_unreachable_use_sqlite_fallback()
-    _using_database_logged = None
-    _first_postgres_connection_log_done = False
+        return 10
 
 
 def _execute_select_one_health(conn: DbConnection) -> None:
-    """``SELECT 1 AS ok`` — compatível com SQLite ``Row`` e Postgres ``dict_row``."""
-    if isinstance(conn, sqlite3.Connection):
-        row = conn.execute("SELECT 1 AS ok").fetchone()
-        if row is None or int(row["ok"]) != 1:
-            raise RuntimeError("health probe: unexpected SELECT 1 result (sqlite)")
-        return
+    """``SELECT 1 AS ok`` com ``dict_row``."""
     with conn.cursor() as cur:
         cur.execute("SELECT 1 AS ok", prepare=False)
         row = cur.fetchone()
@@ -208,42 +130,13 @@ def _execute_select_one_health(conn: DbConnection) -> None:
         raise RuntimeError("health probe: unexpected SELECT 1 result (postgres)")
 
 
-def check_database_health(*, apply_auto_fallback: bool = True) -> bool:
-    """
-    Verifica acessibilidade do motor actual com ``SELECT 1``.
-
-    Em falha, regista erro. Se ``apply_auto_fallback`` e o Postgres foi escolhido só por
-    ``DATABASE_URL`` (sem ``DB_PROVIDER=postgres``), activa fallback SQLite e repete o probe.
-    """
+def check_database_health() -> bool:
+    """Verifica PostgreSQL com ``SELECT 1``. Propaga excepção se a ligação falhar."""
     global _last_periodic_health_monotonic
-    try:
-        with get_db_conn() as conn:
-            _execute_select_one_health(conn)
-        _last_periodic_health_monotonic = time.monotonic()
-        return True
-    except Exception as exc:
-        _logger.error(
-            "Database health check failed (%s); SELECT 1 did not succeed.",
-            type(exc).__name__,
-        )
-        if (
-            apply_auto_fallback
-            and should_use_sqlite_fallback_after_postgres_failure()
-            and get_database_provider() == "postgres"
-        ):
-            _activate_postgres_auto_sqlite_fallback(exc)
-            try:
-                with get_db_conn() as conn:
-                    _execute_select_one_health(conn)
-                _last_periodic_health_monotonic = time.monotonic()
-                return True
-            except Exception as exc2:
-                _logger.error(
-                    "Database health check failed after SQLite fallback (%s).",
-                    type(exc2).__name__,
-                )
-                return False
-        return False
+    with get_db_conn() as conn:
+        _execute_select_one_health(conn)
+    _last_periodic_health_monotonic = time.monotonic()
+    return True
 
 
 def maybe_run_periodic_database_health() -> None:
@@ -265,46 +158,11 @@ def maybe_run_periodic_database_health() -> None:
 
 def describe_active_database() -> str:
     """Identificador seguro para logs (DSN Postgres mascara password)."""
-    if get_database_provider() == "sqlite":
-        return f"sqlite:{DB_PATH}"
     dsn = get_supabase_db_url() or get_postgres_dsn() or ""
     if not dsn:
         return "postgres:(dsn não configurado)"
     masked = re.sub(r"(//[^:/]+:)([^@]+)(@)", r"\1***\3", dsn, count=1)
     return f"postgres:{masked}"
-
-
-def get_conn() -> sqlite3.Connection:
-    if get_database_provider() != "sqlite":
-        raise RuntimeError(
-            "get_conn() is SQLite-only. Use get_db_conn() for PostgreSQL "
-            "(automatic via DATABASE_URL or explicit DB_PROVIDER), "
-            "or force SQLite with DB_PROVIDER=sqlite."
-        )
-    _log_using_database_once("sqlite")
-    global _first_sqlite_connection_log_done
-    # Nova conexão por uso; Streamlit pode executar código em várias threads.
-    try:
-        SQLITE_DATA_DIR.mkdir(parents=True, exist_ok=True)
-    except (PermissionError, OSError):
-        pass
-    try:
-        conn = sqlite3.connect(
-            str(DB_PATH),
-            timeout=30.0,
-            factory=TimedSqliteConnection,
-        )
-    except (sqlite3.Error, OSError) as exc:
-        _logger.exception("Falha ao abrir SQLite (%s)", DB_PATH)
-        raise ConnectionError(
-            f"Não foi possível ligar à base SQLite em {DB_PATH}: {exc}"
-        ) from exc
-    conn.row_factory = sqlite3.Row
-    conn.execute("PRAGMA foreign_keys = ON;")
-    if not _first_sqlite_connection_log_done:
-        _logger.debug("Database connection ready sqlite path=%s", DB_PATH)
-        _first_sqlite_connection_log_done = True
-    return conn
 
 
 def _ensure_postgres_dsn_sslmode_require(dsn: str) -> tuple[str, str]:
@@ -409,28 +267,29 @@ def _resolve_postgres_host_to_ipv4(host: str, *, silent_probe: bool) -> str | No
 
 
 def _require_postgres_dsn() -> str:
-    # ``DATABASE_URL`` é a fonte canónica solicitada para o string de ligação;
-    # se ausente, mantém-se a cadeia já suportada (Supabase, secrets, etc.).
-    direct = (os.environ.get(DATABASE_URL_ENV) or "").strip()
+    # :func:`get_database_url` → env ``DATABASE_URL`` + segredos Streamlit; depois Supabase / cadeia legacy.
+    direct = get_database_url()
     if direct:
-        return direct
+        return direct.strip()
     dsn = get_supabase_db_url() or get_postgres_dsn()
     if not dsn:
         raise RuntimeError(
             "PostgreSQL connection requested but no DSN is configured. "
-            "Set DATABASE_URL, SUPABASE_DB_URL (recommended for Supabase), or other fallbacks "
-            "documented in database.config."
+            "Set DATABASE_URL, SUPABASE_DB_URL (recommended for Supabase), or other DSN "
+            "environment variables documented in database.config."
         )
     return dsn
 
 
 def get_postgres_conn(*, silent_probe: bool = False) -> psycopg.Connection:
-    """Nova ligação Postgres (psycopg 3): ``DATABASE_URL`` / fallbacks, modo pooler-seguro.
+    """Nova ligação Postgres (psycopg 3): ``DATABASE_URL`` / fallbacks.
 
-    ``autocommit=True``, ``prepare_threshold=0``, ``sslmode`` explícito, ``DISCARD ALL`` na sessão,
-    e ``cursor(..., binary=False)`` por defeito. Operações multi-query devem usar ``conn.transaction()``.
+    ``prepare_threshold=0`` e ``sslmode`` no DSN (Supabase: ``require``). Sem ``DISCARD ALL`` nem
+    outros comandos de sessão após conectar (evita ``DuplicatePreparedStatement`` com PgBouncer).
+    ``cursor(..., binary=False)`` por defeito (só lado cliente). Operações multi-query:
+    ``conn.transaction()``.
 
-    ``silent_probe=True`` omite «Active database backend=…» / «connection ready» e o traceback na falha;
+    ``silent_probe=True`` omite «Active database backend=…», o INFO «PgBouncer safe mode» (primeira ligação) e o traceback na falha;
     regista na mesma ``PostgreSQL connection FAILED: <tipo> - <mensagem> | repr=…`` para diagnóstico.
     """
     if not silent_probe:
@@ -438,22 +297,12 @@ def get_postgres_conn(*, silent_probe: bool = False) -> psycopg.Connection:
     global _first_postgres_connection_log_done
     raw_dsn = _require_postgres_dsn()
     dsn, sslmode_label = _ensure_postgres_dsn_sslmode_require(raw_dsn)
-    # Supabase / nuvem: ``sslmode=require`` no DSN quando omitido (ver :func:`_ensure_postgres_dsn_sslmode_require`).
-    ssl_log = (
-        "PostgreSQL SSL mode: require"
-        if sslmode_label == "require"
-        else f"PostgreSQL SSL mode: {sslmode_label}"
-    )
-    if silent_probe:
-        _logger.debug("%s", ssl_log)
-    else:
-        _logger.info("%s", ssl_log)
-    prep_log = "Prepared statements disabled (prepare_threshold=0)"
-    if silent_probe:
-        _logger.debug("%s", prep_log)
-    else:
-        _logger.info("%s", prep_log)
     timeout = _postgres_connect_timeout_seconds()
+    _logger.debug(
+        "PostgreSQL connect params: sslmode=%s prepare_threshold=0 connect_timeout=%s",
+        sslmode_label,
+        timeout,
+    )
     connect_kw: dict[str, Any] = {
         "autocommit": True,
         "connect_timeout": timeout,
@@ -481,26 +330,17 @@ def get_postgres_conn(*, silent_probe: bool = False) -> psycopg.Connection:
         raise ConnectionError(
             "Não foi possível ligar à base PostgreSQL. Verifique o DSN e a rede."
         ) from exc
-    _apply_pgbouncer_safe_session(conn)
+    _wrap_postgres_cursor_binary_false(conn)
     if not silent_probe and not _first_postgres_connection_log_done:
-        _logger.debug("Database connection ready %s", describe_active_database())
+        _logger.info("PostgreSQL connection established (PgBouncer safe mode)")
         _first_postgres_connection_log_done = True
     return conn
 
 
-def get_db_conn() -> DbConnection:
-    """Devolve conexão conforme :func:`~database.config.get_database_provider`."""
-    global _primary_database_postgres_logged
-    provider = get_database_provider()
-    if provider == "sqlite":
-        return get_conn()
-    if not _primary_database_postgres_logged:
-        _logger.info("Primary database: PostgreSQL")
-        _primary_database_postgres_logged = True
+def get_db_conn() -> psycopg.Connection:
+    """PostgreSQL apenas — sem fallback SQLite (entrada única da aplicação)."""
     try:
         return get_postgres_conn()
-    except ConnectionError as exc:
-        if should_use_sqlite_fallback_after_postgres_failure():
-            _activate_postgres_auto_sqlite_fallback(exc)
-            return get_conn()
-        raise
+    except Exception as exc:
+        _logger.error("FATAL: PostgreSQL connection failed — no fallback allowed")
+        raise ConnectionError("PostgreSQL connection required but failed") from exc

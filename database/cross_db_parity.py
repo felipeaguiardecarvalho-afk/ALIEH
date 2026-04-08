@@ -5,8 +5,8 @@ directamente pelo caminho do ficheiro (não usa :func:`database.connection.get_d
 para não depender de ``DB_PROVIDER`` / ``DATABASE_URL`` ao mesmo tempo.
 
 PostgreSQL abre uma **ligação nova e dedicada** por relatório via ``get_postgres_conn`` (sem reutilizar
-ligação global da app). Pilha pooler-safe (``prepare_threshold=0``, ``autocommit``, ``DISCARD ALL``,
-etc.). Consultas no Postgres usam ``cursor().execute()`` (não ``Connection.execute``).
+ligação global da app). ``prepare_threshold=0``, ``autocommit``, sem comandos de sessão extra.
+Consultas no Postgres usam ``cursor().execute()`` (não ``Connection.execute``).
 
 Uso::
 

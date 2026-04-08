@@ -22,6 +22,8 @@ from typing import Any
 import pytest
 
 from database import connection as connection_mod
+from database.repositories import support as repo_support
+from database.sqlite_tools import sqlite_connect_for_local_schema
 
 
 TENANT = "default"
@@ -87,16 +89,21 @@ def concurrent_db(tmp_path, monkeypatch):
     monkeypatch.setenv("DB_PROVIDER", "sqlite")
     db_path = tmp_path / "concurrent_sales.db"
     monkeypatch.setattr(connection_mod, "DB_PATH", db_path)
+
+    def _sqlite_get_db_conn():
+        return sqlite_connect_for_local_schema(connection_mod.DB_PATH)
+
+    monkeypatch.setattr(repo_support, "get_db_conn", _sqlite_get_db_conn)
     from database.init_db import init_db
 
     init_db()
-    with connection_mod.get_db_conn() as conn:
+    with sqlite_connect_for_local_schema(connection_mod.DB_PATH) as conn:
         prod_id, cust_id = _seed_catalog(conn, initial_stock=100.0)
     yield db_path, prod_id, cust_id
 
 
 def _read_stock_and_sold(product_id: int) -> tuple[float, int]:
-    with connection_mod.get_db_conn() as c:
+    with sqlite_connect_for_local_schema(connection_mod.DB_PATH) as c:
         st = float(
             c.execute(
                 "SELECT stock FROM products WHERE tenant_id = ? AND id = ?;",
@@ -115,7 +122,7 @@ def _read_stock_and_sold(product_id: int) -> tuple[float, int]:
 
 
 def _read_sku_master_total() -> float:
-    with connection_mod.get_db_conn() as c:
+    with sqlite_connect_for_local_schema(connection_mod.DB_PATH) as c:
         v = c.execute(
             """
             SELECT total_stock FROM sku_master
@@ -162,7 +169,7 @@ def test_concurrent_sales_all_succeed_stock_zero(concurrent_db):
     """Várias vendas paralelas esgotam o stock sem inconsistência."""
     _, product_id, customer_id = concurrent_db
     initial = 20.0
-    with connection_mod.get_db_conn() as c:
+    with sqlite_connect_for_local_schema(connection_mod.DB_PATH) as c:
         c.execute(
             "UPDATE products SET stock = ? WHERE tenant_id = ? AND id = ?;",
             (initial, TENANT, product_id),
@@ -200,7 +207,7 @@ def test_concurrent_sales_oversubscribe_partial_failures(concurrent_db):
     """Sobre-subscrição: apenas parte das vendas conclui; estoque nunca negativo."""
     _, product_id, customer_id = concurrent_db
     initial = 7.0
-    with connection_mod.get_db_conn() as c:
+    with sqlite_connect_for_local_schema(connection_mod.DB_PATH) as c:
         c.execute(
             "UPDATE products SET stock = ? WHERE tenant_id = ? AND id = ?;",
             (initial, TENANT, product_id),
@@ -237,7 +244,7 @@ def test_concurrent_sales_stress_random_quantities(concurrent_db):
     """Stress: quantidades aleatórias; invariante global e ``sku_master`` alinhado."""
     _, product_id, customer_id = concurrent_db
     initial = 50.0
-    with connection_mod.get_db_conn() as c:
+    with sqlite_connect_for_local_schema(connection_mod.DB_PATH) as c:
         c.execute(
             "UPDATE products SET stock = ? WHERE tenant_id = ? AND id = ?;",
             (initial, TENANT, product_id),

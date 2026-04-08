@@ -30,15 +30,8 @@ def test_export_all_data_writes_json_csv_and_manifest(tmp_path, monkeypatch):
     conn.close()
 
     monkeypatch.setattr(conn_mod, "DB_PATH", db_path)
+    monkeypatch.setattr(ex, "DB_PATH", db_path)
     monkeypatch.setattr(ex, "get_db_provider", lambda: "sqlite")
-
-    def _conn():
-        c = __import__("sqlite3").connect(str(db_path))
-        c.row_factory = __import__("sqlite3").Row
-        return c
-
-    # ``sqlite_export`` importa ``get_db_conn`` por nome; patch no módulo de export.
-    monkeypatch.setattr(ex, "get_db_conn", lambda: _conn())
 
     out_root = tmp_path / "export"
     run_dir = ex.export_all_data(out_root, subdir_with_timestamp=False)

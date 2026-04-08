@@ -13,6 +13,7 @@ from datetime import datetime
 import pytest
 
 from database import connection as connection_mod
+from database.sqlite_tools import sqlite_connect_for_local_schema
 from utils import backup_recovery as br
 from utils import critical_log as cl
 
@@ -67,7 +68,7 @@ def recovery_env(tmp_path, monkeypatch):
     cl._chain_tail_initialized = False  # noqa: SLF001
     cl._chain_prev_in_memory = cl._GENESIS_PREV  # noqa: SLF001
 
-    with connection_mod.get_db_conn() as conn:
+    with sqlite_connect_for_local_schema(connection_mod.DB_PATH) as conn:
         _seed_one_customer(conn)
 
     log_path.write_text(_make_valid_audit_log_line(), encoding="utf-8")

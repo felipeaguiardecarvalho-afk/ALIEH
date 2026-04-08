@@ -1,13 +1,9 @@
 """
 Camada de persistência.
 
-**Provedor:** modo automático (:func:`database.config.get_database_provider`) —
-``DATABASE_URL`` → Postgres; senão SQLite. ``DB_PROVIDER`` continua opcional para
-forçar o motor. Use :func:`database.connection.get_db_conn`; :func:`database.connection.get_conn`
-é só SQLite.
+**App:** :func:`database.connection.get_db_conn` usa **só PostgreSQL** (sem fallback SQLite).
 
-- **SQLite (ficheiro):** ``database.connection.DB_PATH`` — defeito ``/data/business.db``
-  (pasta ``/data`` criada automaticamente; dados fora do repositório para deploys não apagarem BD).
+- **SQLite (ficheiro, migrações / ferramentas):** ``database.connection.DB_PATH``.
 
 - `init_db` em `database.init_db`: cria/migra o schema **apenas em SQLite** (sem recriar tabelas
   nem apagar dados — ``CREATE IF NOT EXISTS`` / ``ALTER`` condicionais).
@@ -26,7 +22,6 @@ from database.config import (
 from database.connection import (
     DB_PATH,
     check_database_health,
-    get_conn,
     get_db_conn,
     get_postgres_conn,
     maybe_run_periodic_database_health,
@@ -43,7 +38,6 @@ __all__ = [
     "BASE_DIR",
     "DB_PATH",
     "check_database_health",
-    "get_conn",
     "get_db_conn",
     "get_database_provider",
     "get_database_url",

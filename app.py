@@ -52,6 +52,7 @@ from utils.validators import (
 import psycopg
 import streamlit as st
 
+from database.config import get_db_provider
 from database.connection import maybe_run_periodic_database_health
 from services.db_startup import run_database_init
 from services.domain_constants import (
@@ -139,7 +140,7 @@ def test_db_connection():
         )
         try:
             with conn.cursor() as cur:
-                cur.execute("SELECT current_database(), current_user;")
+                cur.execute("SELECT current_database(), current_user;", prepare=False)
                 result = cur.fetchone()
             return result
         finally:
@@ -402,9 +403,11 @@ def _maybe_preview_product_sku() -> Optional[str]:
 def _maybe_sidebar_database_export() -> None:
     """
     Quando `allow_database_export` está definido em Streamlit Secrets (ex.: Cloud),
-    mostra um botão para descarregar o SQLite ativo — útil no Cloud para backup.
-    Desativar o segredo logo após o download.
+    mostra um botão para descarregar o ficheiro SQLite ativo — só em deploys com ``DB_PROVIDER=sqlite``;
+    com PostgreSQL não há ficheiro .db da aplicação.
     """
+    if get_db_provider() != "sqlite":
+        return
     try:
         allow = st.secrets.get("allow_database_export", False)
     except Exception:
@@ -440,12 +443,12 @@ def _maybe_sidebar_database_export() -> None:
 
 
 def _render_uat_manual_checklist_page() -> None:
-    """Checklist interactivo UAT (secção A.4); persistência por inquilino em SQLite."""
+    """Checklist interactivo UAT (secção A.4); persistência por inquilino na base de dados."""
     require_operator_or_admin()
     st.markdown("### Checklist UAT manual")
     st.caption(
         "Formalização da validação de negócio (relatório UAT, secção A.4). "
-        "Grave cada caso após executar o teste na aplicação; os registos ficam na base SQLite "
+        "Grave cada caso após executar o teste na aplicação; os registos ficam na base de dados "
         "do inquilino actual e entram nas exportações de auditoria quando configuradas."
     )
     tid = effective_tenant_id_for_request()
@@ -2257,8 +2260,7 @@ section[data-testid="stSidebar"][style*="translateX(-"] ~ [data-testid="stMain"]
         st.markdown("### Clientes")
         st.caption(
             "Cadastre clientes com busca opcional de endereço via **ViaCEP**. "
-            "**Salvar cliente** grava na tabela local **`customers`** do SQLite "
-            f"(`{get_sqlite_db_path()}`). "
+            "**Salvar cliente** grava na tabela **`customers`** na base de dados. "
             "O **código do cliente** é gerado pelo banco — não preencha no formulário."
         )
 

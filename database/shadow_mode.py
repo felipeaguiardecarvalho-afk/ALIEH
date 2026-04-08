@@ -1,9 +1,9 @@
 """Modo *shadow*: Postgres como fonte de verdade; mesma transacção replicada em SQLite (opt-in).
 
-Activar com ``ALIEH_DB_SHADOW_MODE=1`` e ``ALIEH_DB_SHADOW_SQLITE`` = caminho do ``.db``
-espelho (schema alinhado ao SQLite da app). Falhas no SQLite **não** afectam o fluxo em
-Postgres — registo a ERROR. Divergências de ``rowcount`` em escritos em série
-(INSERT/UPDATE/DELETE) logam WARNING.
+Requer ``ALIEH_DB_SHADOW_MODE=1``, ``ALIEH_DB_SHADOW_SQLITE`` (caminho do ``.db`` espelho) **e**
+``ALIEH_ALLOW_RUNTIME_SQLITE=1`` — sem o último, nenhum ``sqlite3.connect`` é feito (app PostgreSQL-only).
+Falhas no SQLite **não** afectam o fluxo em Postgres — registo a ERROR. Divergências de ``rowcount``
+em escritos em série (INSERT/UPDATE/DELETE) logam WARNING.
 
 Limitações:
 
@@ -28,15 +28,23 @@ _logger = logging.getLogger(__name__)
 
 _ENV_MODE = "ALIEH_DB_SHADOW_MODE"
 _ENV_SQLITE = "ALIEH_DB_SHADOW_SQLITE"
+# SQLite em runtime (espelho shadow) só com este opt-in — a app em produção usa só PostgreSQL.
+_RUNTIME_SQLITE_ALLOW_ENV = "ALIEH_ALLOW_RUNTIME_SQLITE"
 
 _shadow_sqlite_conn_var: ContextVar[sqlite3.Connection | None] = ContextVar(
     "shadow_sqlite_conn", default=None
 )
 _shadow_depth_var: ContextVar[int] = ContextVar("shadow_depth", default=0)
+_shadow_runtime_blocked_logged = False
 
 
 def is_shadow_mode_enabled() -> bool:
     v = (os.environ.get(_ENV_MODE) or "").strip().lower()
+    return v in ("1", "true", "yes", "on")
+
+
+def _runtime_sqlite_mirror_allowed() -> bool:
+    v = (os.environ.get(_RUNTIME_SQLITE_ALLOW_ENV) or "").strip().lower()
     return v in ("1", "true", "yes", "on")
 
 
@@ -70,6 +78,19 @@ def _open_shadow() -> sqlite3.Connection:
 def mirrored_write_transaction(immediate: bool) -> Iterator[None]:
     """Envolve a transacção de escrita Postgres com BEGIN/COMMIT paralelos no SQLite."""
     if not is_shadow_mode_enabled():
+        yield
+        return
+
+    global _shadow_runtime_blocked_logged
+    if not _runtime_sqlite_mirror_allowed():
+        if not _shadow_runtime_blocked_logged:
+            _shadow_runtime_blocked_logged = True
+            _logger.warning(
+                "%s activo mas espelho SQLite em runtime está desactivado. "
+                "Defina %s=1 apenas em dev/validação (a app não usa SQLite como BD principal).",
+                _ENV_MODE,
+                _RUNTIME_SQLITE_ALLOW_ENV,
+            )
         yield
         return
 

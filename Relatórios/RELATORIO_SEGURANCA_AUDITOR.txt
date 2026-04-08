@@ -2,6 +2,18 @@
 RELATÓRIO DE SEGURANÇA — ALIEH MANAGEMENT (gestão Streamlit + SQLite)
 ================================================================================
 
+  Actualização Abril 2026 (nota de leitura)
+  - Em **produção** com `DATABASE_URL` / Supabase, a app usa **PostgreSQL** como único motor em
+    `get_db_conn()` (falha explícita: `ConnectionError` + log FATAL; sem fallback SQLite). Credenciais e
+    RLS no Supabase são críticas. **Smoke recomendado antes de deploy:** `python -m database.test_postgres_runtime`
+    (deve imprimir `(1,)` com `SELECT 1` e `prepare=False`).
+  - **Modo shadow** (replicação opcional para ficheiro SQLite): só efectua `sqlite3.connect` em runtime se
+    `ALIEH_ALLOW_RUNTIME_SQLITE=1` estiver definido (além das variáveis de shadow); caso contrário não há
+    ligação SQLite pelo espelho.
+  - **SQLite** permanece relevante para dev, `init_db` quando `DB_PROVIDER=sqlite`, migrações, export
+    administrativo (condicionado ao provedor) e testes. Secções abaixo sobre PRAGMA aplicam-se a esse modo;
+    ver `RELATORIO_STATUS_ENGENHEIRO.txt` e `RELATORIO_AUDITOR_ATUALIZACAO_POS_CONTROLES.txt` para o modelo actual.
+
 Âmbito: análise com base no repositório (Python/Streamlit, database/, services/,
 utils/, .streamlit/, .gitignore e clientes JS Supabase).
 
@@ -13,11 +25,12 @@ Community Cloud, DNS, SSO, etc.).
 1. RESUMO EXECUTIVO
 --------------------------------------------------------------------------------
 
-O núcleo operacional é uma aplicação Streamlit com SQLite local ao projeto. Há
-controlo de entrada (validação e listas fechadas), consultas parametrizadas à
-base, endurecimento em caminhos de ficheiros de imagem, chaves estrangeiras
-ativas, transações para operações críticas e gestão de segredos via Streamlit
-Secrets (secrets.toml ignorado pelo Git).
+O núcleo operacional é uma aplicação Streamlit; em deploy com Postgres/Supabase,
+a persistência principal é remota (consultas parametrizadas, `tenant_id`, etc.).
+SQLite continua disponível para desenvolvimento, export e DDL local. Há controlo
+de entrada (validação e listas fechadas), endurecimento em caminhos de ficheiros
+de imagem, integridade referencial no motor activo, transações para operações
+críticas e gestão de segredos via Streamlit Secrets (secrets.toml ignorado pelo Git).
 
 Não foi identificado no código Python um modelo completo de autenticação/
 autorização de utilizadores (login com perfis e RBAC na app). A proteção
@@ -37,11 +50,11 @@ Segredos locais
   - .streamlit/secrets.toml está em .gitignore; existe secrets.toml.example
     sem credenciais sensíveis.
 
-Nome/caminho da BD
-  - database/connection.py: em deploy Streamlit Cloud (/mount/...) força
-    business.db; desenvolvimento pode usar ALIEH_SQLITE, segredo sqlite_filename
-    ou padrão businessdev.db; produção noutro host pode forçar com
-    ALIEH_PRODUCTION ou ALIEH_USE_BUSINESS_DB.
+Nome/caminho da BD (SQLite de referência / cópias)
+  - database/connection.py define DB_PATH para migrações/export: tenta /data,
+    .alieh_data ou temp; ficheiro típico business.db em deploy Cloud quando SQLite
+    é usado. A app em produção com DATABASE_URL usa Postgres, não este ficheiro
+    como motor principal.
 
 Ficheiros de BD
   - *.db, *.sqlite, *.sqlite3 no .gitignore — reduz risco de commit acidental.
@@ -57,11 +70,12 @@ Privacidade Streamlit
 
 
 --------------------------------------------------------------------------------
-3. CAMADA DE BASE DE DADOS (SQLite)
+3. CAMADA DE BASE DE DADOS (SQLite / referência Postgres)
 --------------------------------------------------------------------------------
 
-Integridade referencial
-  - get_conn() executa PRAGMA foreign_keys = ON em cada ligação.
+Integridade referencial (ligação SQLite local / ferramentas)
+  - Ligações SQLite abertas via `sqlite_connect_for_local_schema` / scripts usam
+    PRAGMA foreign_keys = ON. Em produção, a app usa PostgreSQL (constraints no servidor).
 
 Transações
   - database/transactions.py: BEGIN / COMMIT e rollback em exceções para
@@ -141,9 +155,9 @@ Supabase (JS)
   - Recomenda-se não tratar a chave anon como segredo absoluto, mas revisar
     políticas e considerar variáveis de ambiente em builds futuros.
 
-O fluxo principal Python/Streamlit + SQLite não depende deste ficheiro JS para o
-core analisado; a exposição afeta sobretudo código Node/frontend que use esse
-módulo.
+O fluxo principal Python/Streamlit (Postgres em produção ou SQLite em dev) não
+depende deste ficheiro JS para o core analisado; a exposição afeta sobretudo
+código Node/frontend que use esse módulo.
 
 
 --------------------------------------------------------------------------------

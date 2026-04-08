@@ -13,6 +13,8 @@ from datetime import datetime
 import pytest
 
 from database import connection as connection_mod
+from database.repositories import support as repo_support
+from database.sqlite_tools import sqlite_connect_for_local_schema
 from database.repositories.product_repository import decrement_product_stock_manual
 from services.product_service import apply_manual_stock_write_down
 
@@ -66,20 +68,25 @@ def baixa_db(tmp_path, monkeypatch):
     monkeypatch.setenv("DB_PROVIDER", "sqlite")
     db_path = tmp_path / "manual_stock_baixa.db"
     monkeypatch.setattr(connection_mod, "DB_PATH", db_path)
+
+    def _sqlite_get_db_conn():
+        return sqlite_connect_for_local_schema(connection_mod.DB_PATH)
+
+    monkeypatch.setattr(repo_support, "get_db_conn", _sqlite_get_db_conn)
     from database.init_db import init_db
 
     init_db()
-    with connection_mod.get_db_conn() as conn:
+    with sqlite_connect_for_local_schema(connection_mod.DB_PATH) as conn:
         pid = _seed_product_with_stock(conn, stock=10.0)
     yield db_path, pid
 
 
 def test_decrement_product_stock_manual_reduces_stock_keeps_cost_price(baixa_db):
     _, pid = baixa_db
-    with connection_mod.get_db_conn() as conn:
+    with sqlite_connect_for_local_schema(connection_mod.DB_PATH) as conn:
         new = decrement_product_stock_manual(conn, pid, 3.5, tenant_id=TENANT)
     assert new == pytest.approx(6.5)
-    with connection_mod.get_db_conn() as c:
+    with sqlite_connect_for_local_schema(connection_mod.DB_PATH) as c:
         row = c.execute(
             "SELECT stock, cost, price FROM products WHERE tenant_id = ? AND id = ?;",
             (TENANT, pid),
@@ -98,7 +105,7 @@ def test_apply_manual_stock_write_down_service(baixa_db):
     _, pid = baixa_db
     ns = apply_manual_stock_write_down(pid, 2.0, user_id="u-test", tenant_id=TENANT)
     assert ns == pytest.approx(8.0)
-    with connection_mod.get_db_conn() as c:
+    with sqlite_connect_for_local_schema(connection_mod.DB_PATH) as c:
         st = float(
             c.execute(
                 "SELECT stock FROM products WHERE tenant_id = ? AND id = ?;",
@@ -111,23 +118,23 @@ def test_apply_manual_stock_write_down_service(baixa_db):
 def test_decrement_rejects_insufficient_stock(baixa_db):
     _, pid = baixa_db
     with pytest.raises(ValueError, match="Stock insuficiente"):
-        with connection_mod.get_db_conn() as conn:
+        with sqlite_connect_for_local_schema(connection_mod.DB_PATH) as conn:
             decrement_product_stock_manual(conn, pid, 50.0, tenant_id=TENANT)
 
 
 def test_decrement_rejects_non_positive_qty(baixa_db):
     _, pid = baixa_db
     with pytest.raises(ValueError, match="maior que zero"):
-        with connection_mod.get_db_conn() as conn:
+        with sqlite_connect_for_local_schema(connection_mod.DB_PATH) as conn:
             decrement_product_stock_manual(conn, pid, 0.0, tenant_id=TENANT)
 
 
 def test_decrement_allows_full_depletion(baixa_db):
     _, pid = baixa_db
-    with connection_mod.get_db_conn() as conn:
+    with sqlite_connect_for_local_schema(connection_mod.DB_PATH) as conn:
         new = decrement_product_stock_manual(conn, pid, 10.0, tenant_id=TENANT)
     assert new == pytest.approx(0.0)
-    with connection_mod.get_db_conn() as c:
+    with sqlite_connect_for_local_schema(connection_mod.DB_PATH) as c:
         sm = c.execute(
             "SELECT total_stock FROM sku_master WHERE tenant_id = ? AND sku = ?;",
             (TENANT, SKU_BAIXA),

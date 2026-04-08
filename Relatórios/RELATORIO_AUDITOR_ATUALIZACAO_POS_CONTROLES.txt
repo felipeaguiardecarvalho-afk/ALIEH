@@ -4,11 +4,15 @@ RELATÓRIO TÉCNICO PARA AUDITORIA — ALIEH MANAGEMENT
 ================================================================================
 
 Revisão: Abril 2026 — estado do código e controlos em Python / Streamlit /
-SQLite, com detalhe operacional para amostragem, walkthrough, avaliação de
-risco residual e planeamento de evolução (ex.: SaaS multi-inquilino).
+PostgreSQL (produção) e SQLite (dev/migrações/export), com detalhe operacional
+para amostragem, walkthrough, avaliação de risco residual e planeamento de evolução.
 
-  Última actualização documental (revisão minuciosa para auditor): Abril 2026
-    (deploy Cloud: paths SQLite; pooler; auth obrigatória; 76/75 testes)
+  Última actualização documental (revisão para auditor): Abril 2026
+    (get_db_conn = get_postgres_conn; falha única → FATAL + ConnectionError; sem fallback SQLite;
+    pooler: prepare_threshold=0, sem SQL de sessão pós-connect, log PgBouncer safe mode;
+    DSN get_database_url + Supabase; shadow SQLite só com ALIEH_ALLOW_RUNTIME_SQLITE=1;
+    smoke pré-deploy database.test_postgres_runtime; export sidebar .db só se DB_PROVIDER sqlite;
+    72 colectados / 71 suíte habitual com --ignore=test_postgres_integration)
   ---------------------------------------------------------------------------
   **Arquitectura de acesso à base de dados (fachada services/)**
   - A UI principal (**app.py**) não importa **database.*** para persistência
@@ -47,28 +51,31 @@ risco residual e planeamento de evolução (ex.: SaaS multi-inquilino).
     **stock_baixa_form_nonce** para alternar a chave do checkbox após sucesso
     (não alterar **session_state** da chave do widget após instanciação).
 
-  **Observabilidade Postgres / Supabase (sem activar Postgres como motor principal)**
+  **Observabilidade Postgres / Supabase (motor da app em produção)**
   - **database/health_check.py** — `load_dotenv` na raiz; `test_postgres_connection()` via
-    `get_postgres_conn(silent_probe=True)`, `SELECT 1`, logs OK/FAILED (sem credenciais).
+    `get_postgres_conn(silent_probe=True)`, `SELECT 1` com `prepare=False`, logs OK/FAILED (sem credenciais).
     **schedule_postgres_connectivity_probe_on_startup**: thread daemon opcional;
     **ALIEH_SKIP_POSTGRES_STARTUP_PROBE=1** desactiva. CLI: `python -m database.health_check`.
-  - **database/connection.py** — `silent_probe` no probe; ligação Postgres em modo **pooler-safe**
-    (`autocommit=True`, `prepare_threshold=0` no connect **e** reatribuição pós-connect,
-    `DISCARD ALL`, `cursor` com `binary=False` por defeito,
-    IPv4 `hostaddr` quando aplicável, log «PgBouncer safe mode enabled…»). Transacções explícitas
-    com `conn.transaction()`. Pastas SQLite: `/data` ou `.alieh_data` ou tempfile
-    (**_resolve_sqlite_data_dir**) para evitar falha de import em ambientes sem escrita em `/data`
-    (Streamlit Cloud).
+  - **database/connection.py** — `get_db_conn()` delega em `get_postgres_conn()`; qualquer falha → log
+    `FATAL: PostgreSQL connection failed — no fallback allowed` e `ConnectionError("PostgreSQL connection required but failed")`.
+    `get_postgres_conn`: DSN via `get_database_url()` depois cadeia Supabase; `prepare_threshold=0`,
+    `sslmode` no DSN, `connect_timeout` defeito 10 s, **sem comandos SQL de sessão após connect**
+    (mitigação `DuplicatePreparedStatement` PgBouncer); INFO na primeira ligação: `PostgreSQL connection established (PgBouncer safe mode)`.
+    **Shadow:** `database/shadow_mode.py` — `sqlite3.connect` no espelho **apenas** se `ALIEH_ALLOW_RUNTIME_SQLITE=1`
+    (além de `ALIEH_DB_SHADOW_MODE` / `ALIEH_DB_SHADOW_SQLITE`). **DB_PATH** / SQLite mantêm-se para `init_db` (sqlite),
+    migrações, export e testes. **Smoke pré-deploy:** `python -m database.test_postgres_runtime` (esperado `(1,)`).
 
   **Repositório de testes automatizados (pytest)**
-  - **76** testes colectados; suíte habitual **75** (comando típico: `python -m pytest tests/ -q --ignore=tests/test_postgres_integration.py`).
+  - **72** testes colectados; suíte habitual **71 passed, 1 skipped** (comando típico: `python -m pytest tests/ -q --ignore=tests/test_postgres_integration.py`).
     Fixtures de **backup_recovery**, **concurrent_sales** e **manual_stock_write_down** fixam
-    **DB_PROVIDER=sqlite** para isolamento quando o ambiente define **DATABASE_URL**. **Roteiro sugerido**:
+    **DB_PROVIDER=sqlite** e/ou *patch* `support.get_db_conn` / `sqlite_connect_for_local_schema` para isolamento.
+    **Roteiro sugerido**:
+    (0) `python -m database.test_postgres_runtime` no ambiente-alvo (pré-deploy);
     (1) suíte completa; (2) `test_database_config` + `test_database_health` + **test_postgres_probe**;
     (3) RBAC; (4) `test_sql_compat`; (5) vendas/baixa manual; (6) auditoria, backup, export.
   - Inventário por ficheiro em **tests/**: **test_audit_robustness** (7),
     **test_backup_recovery** (4), **test_concurrent_sales** (3),
-    **test_database_config** (18), **test_database_health** (5), **test_postgres_probe** (7),
+    **test_database_config** (~15), **test_database_health** (5), **test_postgres_probe** (7),
     **test_manual_stock_write_down** (5), **test_rbac** (22), **test_sql_compat** (2),
     **test_sqlite_export** (2), **test_postgres_integration** (1, opt-in).
   - **`python -m database.production_readiness_check`** — validação manual/CI Postgres com tenant
@@ -126,8 +133,10 @@ Tom: preciso, rastreável por ficheiro, função, tabela e variável de ambiente
 --------------------------------------------------------------------------------
 
   2.1 Stack e arranque
-  - Aplicação **Streamlit** monolítica; persistência **SQLite** no disco do
-    projeto (determinação do ficheiro em **database/connection.py**).
+  - Aplicação **Streamlit** monolítica; em **produção com DATABASE_URL / Supabase** a persistência
+    da app é **PostgreSQL** via **get_db_conn**. Ficheiro **SQLite** (**DB_PATH**) permanece para
+    desenvolvimento, `init_db` quando `DB_PROVIDER=sqlite`, export e cópias de backup declaradas
+    em **audit_backup** quando aplicável.
   - Arranque observável (**app.py**, `main()`):
       (1) `st.set_page_config`
       (2) **`run_database_init()`** — **services/db_startup.py** → chama
@@ -475,11 +484,13 @@ Tom: preciso, rastreável por ficheiro, função, tabela e variável de ambiente
     fachadas listadas em 11.3.
 
   11.2 Ligação à BD
-  - **get_conn()** em **database/connection.py**: **row_factory** Row,
-    **PRAGMA foreign_keys = ON**.
-  - **get_db_conn()** (SQLite ou Postgres conforme configuração) deve ficar
-    confinado à implementação em **database/** (repositórios, **init_db**,
-    **sqlite_export**, etc.); testes podem *patchar* por conveniência.
+  - **get_db_conn()** em **database/connection.py**: **exclusivamente PostgreSQL** (psycopg);
+    falha de ligação → **ConnectionError** (sem fallback SQLite em runtime).
+  - **SQLite** para DDL incremental (**init_db**), export e testes: **sqlite_connect_for_local_schema**
+    em **database/sqlite_tools.py** com **DB_PATH**; **sqlite_export** e **init_db** não usam **get_db_conn**
+    para abrir SQLite.
+  - Repositórios e **use_connection**: **get_db_conn** confinado à camada **database/**; testes *patcham*
+    **support.get_db_conn** quando necessitam de SQLite isolado.
   - **database/transactions.py**: padrão BEGIN/COMMIT para operações atómicas
     onde utilizado.
 
@@ -757,8 +768,8 @@ Tom: preciso, rastreável por ficheiro, função, tabela e variável de ambiente
     de manutenção de backup declaradas em **audit_backup**.
   run_database_init — ponto de entrada da app para **init_db** + **check_database_health** +
     **schedule_postgres_connectivity_probe_on_startup** via **services/db_startup**.
-  check_database_health — **SELECT 1** sobre o motor activo; fallback SQLite se Postgres
-    automático falhar (paridade com **get_db_conn**).
+  check_database_health — **SELECT 1** sobre **get_db_conn** (Postgres); falha propaga
+    (sem fallback SQLite).
   test_postgres_connection — probe isolado Supabase/Postgres (``silent_probe``); não altera o motor principal.
   schedule_postgres_connectivity_probe_on_startup — agenda **test_postgres_connection** em thread daemon.
   baixa manual de stock — redução directa de **products.stock** sem linha em
@@ -778,7 +789,7 @@ Tom: preciso, rastreável por ficheiro, função, tabela e variável de ambiente
   (`…\ALIEH management`) e Python com dependências de **requirements.txt**
   instaladas.
 
-  - **Contagem pytest (esperado: 76 colectados; 75 na suíte com --ignore=test_postgres_integration):**
+  - **Contagem pytest (esperado: 72 colectados; 71 passed + 1 skipped na suíte com --ignore=test_postgres_integration):**
         python -m pytest --collect-only -q
 
   - **Configuração, saúde e probe Postgres:**
