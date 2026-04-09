@@ -12,7 +12,8 @@
   Resolução DNS/host fica a cargo do libpq (:func:`psycopg.connect`) — sem ``hostaddr`` manual.
   ``prepare_threshold=0``, ``autocommit=True`` — sem comandos de sessão pós-conexão (compatível
   com PgBouncer / Supabase). Transacções explícitas usam ``conn.transaction()``. Cursores por
-  defeito ``binary=False``. ``connect_timeout=10`` e keepalives TCP para ligações estáveis (ex.: Streamlit Cloud).
+  defeito ``binary=False``. ``connect_timeout=5``, keepalives TCP e :func:`connect_with_retry`
+  para ligações estáveis (ex.: Streamlit / Supabase).
   Uma ligação por processo é reutilizada entre reruns Streamlit (cache com ``SELECT 1``); o
   ``close()`` na instância cacheada é um no-op para que ``with get_db_conn()`` não destrua o socket.
 
@@ -117,6 +118,35 @@ def _connection_cache_key(dsn: str, connect_kw: dict[str, Any]) -> tuple[Any, ..
     )
 
 
+def connect_with_retry(
+    dsn: str,
+    connect_kw: dict[str, Any],
+    *,
+    attempts: int = 3,
+) -> psycopg.Connection:
+    """Abre ligação PostgreSQL com até ``attempts`` tentativas e backoff linear (1s, 2s, …)."""
+    last_exc: BaseException | None = None
+    for i in range(attempts):
+        try:
+            return psycopg.connect(dsn, **connect_kw)
+        except (psycopg.Error, OSError) as exc:
+            last_exc = exc
+            if i + 1 < attempts:
+                time.sleep(1 * (i + 1))
+    assert last_exc is not None
+    raise last_exc
+
+
+# Falhas que indicam socket / ligação morta — invalidar cache; não incluir ProgrammingError etc.
+_CONNECT_INVALIDATION_EXC: tuple[type[BaseException], ...] = (
+    OSError,
+    TimeoutError,
+    ConnectionError,
+    psycopg.OperationalError,
+    psycopg.InterfaceError,
+)
+
+
 def _invalidate_cached_conn() -> None:
     """Fecho real e limpeza do singleton (ligação morta ou parâmetros alterados)."""
     global _cached_conn, _cached_conn_real_close, _cached_conn_key
@@ -153,18 +183,24 @@ def _get_or_create_cached_conn(dsn: str, connect_kw: dict[str, Any]) -> psycopg.
         _invalidate_cached_conn()
 
     if _cached_conn is not None:
-        try:
-            with _cached_conn.cursor() as cur:
-                cur.execute("SELECT 1", prepare=False)
-                cur.fetchone()
-            _logger.debug("Reusing cached PostgreSQL connection")
-            return _cached_conn
-        except Exception:
-            _logger.warning("Cached connection invalid, recreating...")
+        if _cached_conn.closed != 0:
+            _logger.warning("Cached connection marked closed, recreating...")
             _invalidate_cached_conn()
+        else:
+            try:
+                with _cached_conn.cursor() as cur:
+                    cur.execute("SELECT 1 AS ok", prepare=False)
+                    cur.fetchone()
+                _logger.debug("Reusing cached PostgreSQL connection")
+                return _cached_conn
+            except _CONNECT_INVALIDATION_EXC:
+                _logger.warning(
+                    "Cached connection invalid (connectivity), recreating...",
+                )
+                _invalidate_cached_conn()
 
     _logger.info("Connecting to PostgreSQL...")
-    conn = psycopg.connect(dsn, **connect_kw)
+    conn = connect_with_retry(dsn, connect_kw)
     conn.prepare_threshold = 0
     _wrap_postgres_cursor_binary_false(conn)
     _install_noop_close_for_cache(conn)
@@ -295,12 +331,12 @@ def get_postgres_conn(*, silent_probe: bool = False) -> psycopg.Connection:
     raw_dsn = _require_postgres_dsn()
     dsn, sslmode_label = _ensure_postgres_dsn_sslmode_require(raw_dsn)
     _logger.debug(
-        "PostgreSQL connect params: sslmode=%s connect_timeout=10 keepalives=1 prepare_threshold=0",
+        "PostgreSQL connect params: sslmode=%s connect_timeout=5 keepalives=1 prepare_threshold=0",
         sslmode_label,
     )
     connect_kw: dict[str, Any] = {
         "autocommit": True,
-        "connect_timeout": 10,
+        "connect_timeout": 5,
         "keepalives": 1,
         "keepalives_idle": 30,
         "keepalives_interval": 10,

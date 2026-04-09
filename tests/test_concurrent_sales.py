@@ -112,12 +112,12 @@ def _read_stock_and_sold(product_id: int) -> tuple[float, int]:
         )
         row = c.execute(
             """
-            SELECT COALESCE(SUM(quantity), 0) FROM sales
+            SELECT COALESCE(SUM(quantity), 0) AS total_qty FROM sales
             WHERE tenant_id = ? AND product_id = ?;
             """,
             (TENANT, product_id),
         ).fetchone()
-        sold = int(row[0])
+        sold = int(row["total_qty"])
     return st, sold
 
 

@@ -186,7 +186,7 @@ def test_get_postgres_conn_uses_supabase_url(reload_db_config, monkeypatch):
         p.assert_called_once()
         assert p.call_args.args[0] == "postgresql://user:pass@localhost:5432/db?sslmode=require"
         assert p.call_args.kwargs.get("autocommit") is True
-        assert p.call_args.kwargs.get("connect_timeout") == 10
+        assert p.call_args.kwargs.get("connect_timeout") == 5
         assert p.call_args.kwargs.get("keepalives") == 1
         assert p.call_args.kwargs.get("keepalives_idle") == 30
         assert p.call_args.kwargs.get("keepalives_interval") == 10
@@ -248,7 +248,7 @@ def test_get_postgres_conn_uses_fixed_connect_timeout_and_keepalives(
     with patch.object(conn.psycopg, "connect", return_value=mock) as p:
         conn.get_postgres_conn()
         assert p.call_args.args[0] == "postgresql://user:pass@localhost:5432/db?sslmode=require"
-        assert p.call_args.kwargs.get("connect_timeout") == 10
+        assert p.call_args.kwargs.get("connect_timeout") == 5
         assert p.call_args.kwargs.get("keepalives") == 1
 
 

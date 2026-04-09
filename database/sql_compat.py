@@ -67,7 +67,7 @@ def pg_execute_no_prepare(
     """
     if is_sqlite_conn(conn):
         raise TypeError("pg_execute_no_prepare requer ligação psycopg (não SQLite)")
-    cur = conn.cursor()
+    cur = conn.cursor(binary=False)
     try:
         if params is None:
             cur.execute(query, prepare=False)
@@ -193,15 +193,18 @@ def db_execute(conn: Any, sql: str, params: Sequence[Any] | Mapping[str, Any] = 
     if is_sqlite_conn(conn):
         return conn.execute(sql_a, params)
     t0 = time.perf_counter()
+    cur = conn.cursor(binary=False)
     try:
-        cur = conn.cursor()
         cur.execute(sql_a, params, prepare=False)
-    except Exception as exc:
+    except BaseException as exc:
         _log_pg_execute_error(sql_a, (time.perf_counter() - t0) * 1000, exc)
+        try:
+            cur.close()
+        except Exception:
+            pass
         raise
-    else:
-        _log_pg_duration(sql_a, (time.perf_counter() - t0) * 1000)
-        return cur
+    _log_pg_duration(sql_a, (time.perf_counter() - t0) * 1000)
+    return cur
 
 def sql_order_ci(column_sql: str) -> str:
     """Expressão para ``ORDER BY`` case-insensitive (sem mudar resultados em dados iguais)."""
@@ -244,12 +247,16 @@ def run_insert_returning_id(conn: Any, sql: str, params: Sequence[Any], pk: str 
     base = sql_a.strip().rstrip(";")
     returning_sql = f"{base} RETURNING {pk}"
     t0 = time.perf_counter()
+    cur = conn.cursor(binary=False)
     try:
-        cur = conn.cursor()
         cur.execute(returning_sql, params, prepare=False)
         row = cur.fetchone()
-    except Exception as exc:
+    except BaseException as exc:
         _log_pg_execute_error(returning_sql, (time.perf_counter() - t0) * 1000, exc)
+        try:
+            cur.close()
+        except Exception:
+            pass
         raise
     else:
         _log_pg_duration(returning_sql, (time.perf_counter() - t0) * 1000)

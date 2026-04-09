@@ -24,7 +24,11 @@ def _connect_pooler_safe(database_url: str) -> psycopg.Connection:
     """
     conn = psycopg.connect(
         database_url,
-        connect_timeout=20,
+        connect_timeout=5,
+        keepalives=1,
+        keepalives_idle=30,
+        keepalives_interval=10,
+        keepalives_count=5,
         row_factory=dict_row,
         autocommit=True,
         prepare_threshold=0,
