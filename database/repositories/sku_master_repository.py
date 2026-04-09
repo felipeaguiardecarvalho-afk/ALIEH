@@ -61,16 +61,16 @@ def sync_sku_master_totals(
     ).fetchone()
     if exists is None:
         ensure_sku_master(conn, sku, tenant_id=tid)
-    total = float(
-        db_execute(
-            conn,
-            """
-            SELECT COALESCE(SUM(stock), 0) FROM products
-            WHERE tenant_id = %s AND sku = %s AND deleted_at IS NULL;
-            """,
-            (tid, sku),
-        ).fetchone()[0]
-    )
+    sum_row = db_execute(
+        conn,
+        """
+        SELECT COALESCE(SUM(stock), 0) AS total_stock
+        FROM products
+        WHERE tenant_id = %s AND sku = %s AND deleted_at IS NULL;
+        """,
+        (tid, sku),
+    ).fetchone()
+    total = float(sum_row["total_stock"] if sum_row else 0)
     now = datetime.now().isoformat(timespec="seconds")
     db_execute(
         conn,

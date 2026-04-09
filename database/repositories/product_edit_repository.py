@@ -72,15 +72,15 @@ def product_lot_edit_block_reason(product_id: int) -> Optional[str]:
             )
 
         if sku:
-            stock_total = float(
-                db_execute(conn,
-                    """
-                    SELECT COALESCE(SUM(stock), 0) FROM products
-                    WHERE tenant_id = %s AND sku = %s AND deleted_at IS NULL;
-                    """,
-                    (tid, sku),
-                ).fetchone()[0]
-            )
+            stock_row = db_execute(conn,
+                """
+                SELECT COALESCE(SUM(stock), 0) AS total_stock
+                FROM products
+                WHERE tenant_id = %s AND sku = %s AND deleted_at IS NULL;
+                """,
+                (tid, sku),
+            ).fetchone()
+            stock_total = float(stock_row["total_stock"] if stock_row else 0)
             if stock_total > _STOCK_EPS:
                 reasons.append("há estoque em um ou mais lotes deste SKU")
 
@@ -101,14 +101,16 @@ def product_lot_edit_block_reason(product_id: int) -> Optional[str]:
                 if abs(float(sku_master_row["selling_price"] or 0)) >= _MONEY_EPS:
                     reasons.append("há preço de venda no cadastro mestre deste SKU")
 
+            comp_row = db_execute(conn,
+                """
+                SELECT COALESCE(SUM(line_total), 0) AS sum_line_total
+                FROM sku_cost_components
+                WHERE tenant_id = %s AND sku = %s;
+                """,
+                (tid, sku),
+            ).fetchone()
             components_line_total_sum = float(
-                db_execute(conn,
-                    """
-                    SELECT COALESCE(SUM(line_total), 0) FROM sku_cost_components
-                    WHERE tenant_id = %s AND sku = %s;
-                    """,
-                    (tid, sku),
-                ).fetchone()[0]
+                comp_row["sum_line_total"] if comp_row else 0
             )
             if (
                 abs(components_line_total_sum) >= _MONEY_EPS

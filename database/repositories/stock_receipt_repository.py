@@ -40,18 +40,14 @@ def sum_active_stock_by_sku(
     tid = effective_tenant_id_for_request(tenant_id)
     row = db_execute(conn,
         """
-        SELECT COALESCE(SUM(stock), 0) AS total FROM products
+        SELECT COALESCE(SUM(stock), 0) AS total_stock FROM products
         WHERE tenant_id = %s AND sku = %s AND deleted_at IS NULL;
         """,
         (tid, sku),
     ).fetchone()
     if row is None:
         return 0.0
-    if isinstance(row, dict):
-        val = row.get("total", 0)
-    else:
-        val = row["total"]
-    return float(val or 0)
+    return float(row["total_stock"] or 0)
 
 
 def fetch_sku_master_avg_unit_cost_row(
