@@ -157,9 +157,11 @@ def _get_or_create_cached_conn(dsn: str, connect_kw: dict[str, Any]) -> psycopg.
         try:
             with _cached_conn.cursor() as cur:
                 cur.execute("SELECT 1", prepare=False)
+                cur.fetchone()
             _logger.debug("Reusing cached PostgreSQL connection")
             return _cached_conn
         except Exception:
+            _logger.warning("Cached connection invalid, recreating...")
             _invalidate_cached_conn()
 
     conn = psycopg.connect(dsn, **connect_kw)
@@ -168,6 +170,7 @@ def _get_or_create_cached_conn(dsn: str, connect_kw: dict[str, Any]) -> psycopg.
     _install_noop_close_for_cache(conn)
     _cached_conn_key = key
     _cached_conn = conn
+    _logger.info("Created new PostgreSQL connection")
     return conn
 
 
