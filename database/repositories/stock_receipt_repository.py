@@ -15,7 +15,7 @@ def fetch_product_batch_row(
 ):
     tid = effective_tenant_id_for_request(tenant_id)
     return db_execute(conn,
-        "SELECT id, sku, deleted_at FROM products WHERE tenant_id = ? AND id = ?;",
+        "SELECT id, sku, deleted_at FROM products WHERE tenant_id = %s AND id = %s;",
         (tid, int(product_id)),
     ).fetchone()
 
@@ -27,7 +27,7 @@ def fetch_sku_master_deleted_flag(
 ):
     tid = effective_tenant_id_for_request(tenant_id)
     return db_execute(conn,
-        "SELECT deleted_at FROM sku_master WHERE tenant_id = ? AND sku = ?;",
+        "SELECT deleted_at FROM sku_master WHERE tenant_id = %s AND sku = %s;",
         (tid, sku),
     ).fetchone()
 
@@ -41,7 +41,7 @@ def sum_active_stock_by_sku(
     row = db_execute(conn,
         """
         SELECT COALESCE(SUM(stock), 0) AS total FROM products
-        WHERE tenant_id = ? AND sku = ? AND deleted_at IS NULL;
+        WHERE tenant_id = %s AND sku = %s AND deleted_at IS NULL;
         """,
         (tid, sku),
     ).fetchone()
@@ -61,7 +61,7 @@ def fetch_sku_master_avg_unit_cost_row(
 ):
     tid = effective_tenant_id_for_request(tenant_id)
     return db_execute(conn,
-        "SELECT avg_unit_cost FROM sku_master WHERE tenant_id = ? AND sku = ?;",
+        "SELECT avg_unit_cost FROM sku_master WHERE tenant_id = %s AND sku = %s;",
         (tid, sku),
     ).fetchone()
 
@@ -87,7 +87,7 @@ def insert_stock_cost_entry(
         INSERT INTO stock_cost_entries (
             tenant_id, sku, product_id, quantity, unit_cost, total_entry_cost,
             stock_before, stock_after, avg_cost_before, avg_cost_after, created_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+        ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s);
         """,
         (
             tid,
@@ -113,7 +113,7 @@ def add_stock_to_product_row(
 ) -> None:
     tid = effective_tenant_id_for_request(tenant_id)
     db_execute(conn,
-        "UPDATE products SET stock = stock + ? WHERE tenant_id = ? AND id = ?;",
+        "UPDATE products SET stock = stock + %s WHERE tenant_id = %s AND id = %s;",
         (qty, tid, int(product_id)),
     )
 
@@ -126,7 +126,7 @@ def set_products_cost_by_sku(
 ) -> None:
     tid = effective_tenant_id_for_request(tenant_id)
     db_execute(conn,
-        "UPDATE products SET cost = ? WHERE tenant_id = ? AND sku = ?;",
+        "UPDATE products SET cost = %s WHERE tenant_id = %s AND sku = %s;",
         (new_avg, tid, sku),
     )
 
@@ -144,8 +144,8 @@ def update_sku_master_stock_avg_and_timestamp(
     db_execute(conn,
         """
         UPDATE sku_master
-        SET total_stock = ?, avg_unit_cost = ?, updated_at = ?
-        WHERE tenant_id = ? AND sku = ?;
+        SET total_stock = %s, avg_unit_cost = %s, updated_at = %s
+        WHERE tenant_id = %s AND sku = %s;
         """,
         (total_stock, avg_unit_cost, now, tid, sku),
     )

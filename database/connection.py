@@ -9,11 +9,10 @@
 - :func:`get_postgres_conn` — **Postgres** (psycopg 3): lê o DSN de ``DATABASE_URL``
   via :func:`database.config.get_database_url`; caso contrário cadeia Supabase / :mod:`database.config`.
   Se o URL não incluir ``sslmode``, anexa ``sslmode=require`` (Supabase / SSL obrigatório).
-  Resolve o ``host`` do DSN para IPv4 com :func:`socket.gethostbyname` e passa ``hostaddr``
-  a :func:`psycopg.connect` para evitar falhas quando o SO não encaminha IPv6 correctamente.
+  Resolução DNS/host fica a cargo do libpq (:func:`psycopg.connect`) — sem ``hostaddr`` manual.
   ``prepare_threshold=0``, ``autocommit=True`` — sem comandos de sessão pós-conexão (compatível
   com PgBouncer / Supabase). Transacções explícitas usam ``conn.transaction()``. Cursores por
-  defeito ``binary=False``. ``connect_timeout`` (defeito 10 s; override ``DATABASE_CONNECT_TIMEOUT``).
+  defeito ``binary=False``. ``connect_timeout=10`` e keepalives TCP para ligações estáveis (ex.: Streamlit Cloud).
   Uma ligação por processo é reutilizada entre reruns Streamlit (cache com ``SELECT 1``); o
   ``close()`` na instância cacheada é um no-op para que ``with get_db_conn()`` não destrua o socket.
 
@@ -29,7 +28,6 @@ from __future__ import annotations
 import logging
 import os
 import re
-import socket
 import tempfile
 import time
 from pathlib import Path
@@ -43,8 +41,6 @@ from database.config import get_database_url, get_postgres_dsn, get_supabase_db_
 
 _logger = logging.getLogger(__name__)
 
-# Segundos (ligação TCP ao servidor Postgres); limitado a intervalo seguro.
-DATABASE_CONNECT_TIMEOUT_ENV = "DATABASE_CONNECT_TIMEOUT"
 # > 0: executar :func:`check_database_health` no máximo uma vez por este intervalo (Streamlit reruns).
 DATABASE_HEALTH_INTERVAL_SECONDS_ENV = "DATABASE_HEALTH_INTERVAL_SECONDS"
 
@@ -110,8 +106,11 @@ def _connection_cache_key(dsn: str, connect_kw: dict[str, Any]) -> tuple[Any, ..
     return (
         dsn,
         connect_kw.get("sslmode"),
-        connect_kw.get("hostaddr"),
         connect_kw.get("connect_timeout"),
+        connect_kw.get("keepalives"),
+        connect_kw.get("keepalives_idle"),
+        connect_kw.get("keepalives_interval"),
+        connect_kw.get("keepalives_count"),
         connect_kw.get("autocommit"),
         connect_kw.get("prepare_threshold"),
         connect_kw.get("row_factory") is dict_row,
@@ -164,6 +163,7 @@ def _get_or_create_cached_conn(dsn: str, connect_kw: dict[str, Any]) -> psycopg.
             _logger.warning("Cached connection invalid, recreating...")
             _invalidate_cached_conn()
 
+    _logger.info("Connecting to PostgreSQL...")
     conn = psycopg.connect(dsn, **connect_kw)
     conn.prepare_threshold = 0
     _wrap_postgres_cursor_binary_false(conn)
@@ -183,15 +183,6 @@ def _log_using_database_once(kind: str) -> None:
             describe_active_database(),
         )
         _using_database_logged = kind
-
-
-def _postgres_connect_timeout_seconds() -> int:
-    raw = (os.environ.get(DATABASE_CONNECT_TIMEOUT_ENV) or "10").strip()
-    try:
-        n = int(raw)
-        return max(1, min(n, 600))
-    except ValueError:
-        return 10
 
 
 def _execute_select_one_health(conn: DbConnection) -> None:
@@ -272,76 +263,6 @@ def _ensure_postgres_dsn_sslmode_require(dsn: str) -> tuple[str, str]:
     return adjusted, "require"
 
 
-def _host_port_from_url_hostport(token: str) -> tuple[str, str | None]:
-    """Extrai host e porto opcional de ``host:port``, ``[ipv6]:port`` ou só ``host``."""
-    t = (token or "").strip()
-    if not t:
-        return "", None
-    if t.startswith("["):
-        close = t.find("]")
-        if close != -1:
-            host = t[1:close]
-            rest = t[close + 1 :]
-            if rest.startswith(":") and rest[1:].isdigit():
-                return host, rest[1:]
-            return host, None
-    if ":" in t:
-        base, maybe_port = t.rsplit(":", 1)
-        if maybe_port.isdigit():
-            return base, maybe_port
-    return t, None
-
-
-def _extract_tcp_host_from_postgres_dsn(dsn: str) -> str | None:
-    """Hostname do DSN Postgres (URL ou parâmetro ``host=``); ``None`` se não aplicável."""
-    s = (dsn or "").strip()
-    if not s:
-        return None
-    if re.match(r"postgres(ql)?://", s, re.I):
-        parsed = urlparse(s)
-        netloc = (parsed.netloc or "").strip()
-        if not netloc:
-            return None
-        hostport = netloc.rsplit("@", 1)[-1]
-        host, _ = _host_port_from_url_hostport(hostport)
-        return host or None
-    m = re.search(r"(?:^|\s)host\s*=\s*([^\s]+)", s, re.I)
-    if not m:
-        return None
-    return m.group(1).strip().strip("'\"") or None
-
-
-def _should_try_ipv4_hostaddr(hostname: str) -> bool:
-    """Falso para socket Unix, IPv6 literais (``:``) e strings vazias."""
-    if not hostname or hostname.startswith("/"):
-        return False
-    if ":" in hostname:
-        return False
-    return True
-
-
-def _resolve_postgres_host_to_ipv4(host: str, *, silent_probe: bool) -> str | None:
-    """Resolve ``host`` para IPv4 via :func:`socket.gethostbyname`; regista ``Resolved IPv4: …``."""
-    if not _should_try_ipv4_hostaddr(host):
-        return None
-    try:
-        ipv4 = socket.gethostbyname(host)
-    except OSError as exc:
-        lvl = logging.DEBUG if silent_probe else logging.WARNING
-        _logger.log(
-            lvl,
-            "PostgreSQL IPv4 resolution skipped for host %r: %s",
-            host,
-            exc,
-        )
-        return None
-    if silent_probe:
-        _logger.debug("Resolved IPv4: %s", ipv4)
-    else:
-        _logger.info("Resolved IPv4: %s", ipv4)
-    return ipv4
-
-
 def _require_postgres_dsn() -> str:
     # :func:`get_database_url` → env ``DATABASE_URL`` + segredos Streamlit; depois Supabase / cadeia legacy.
     direct = get_database_url()
@@ -373,24 +294,21 @@ def get_postgres_conn(*, silent_probe: bool = False) -> psycopg.Connection:
     global _first_postgres_connection_log_done
     raw_dsn = _require_postgres_dsn()
     dsn, sslmode_label = _ensure_postgres_dsn_sslmode_require(raw_dsn)
-    timeout = _postgres_connect_timeout_seconds()
     _logger.debug(
-        "PostgreSQL connect params: sslmode=%s prepare_threshold=0 connect_timeout=%s",
+        "PostgreSQL connect params: sslmode=%s connect_timeout=10 keepalives=1 prepare_threshold=0",
         sslmode_label,
-        timeout,
     )
     connect_kw: dict[str, Any] = {
         "autocommit": True,
-        "connect_timeout": timeout,
+        "connect_timeout": 10,
+        "keepalives": 1,
+        "keepalives_idle": 30,
+        "keepalives_interval": 10,
+        "keepalives_count": 5,
         "row_factory": dict_row,
         "prepare_threshold": 0,
         "sslmode": sslmode_label,
     }
-    host = _extract_tcp_host_from_postgres_dsn(dsn)
-    if host:
-        hostaddr = _resolve_postgres_host_to_ipv4(host, silent_probe=silent_probe)
-        if hostaddr:
-            connect_kw["hostaddr"] = hostaddr
     try:
         conn = _get_or_create_cached_conn(dsn, connect_kw)
     except (psycopg.Error, OSError) as exc:

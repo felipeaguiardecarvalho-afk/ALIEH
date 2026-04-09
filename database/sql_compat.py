@@ -1,7 +1,8 @@
 """Compatibilidade SQL SQLite ↔ PostgreSQL (placeholders e fragmentos portáveis).
 
-- Placeholders: ``?`` (SQLite) vs ``%s`` (psycopg) — usar :func:`db_execute`.
-- PostgreSQL sem placeholders adaptados: :func:`pg_execute_no_prepare` (cursor + ``prepare=False``).
+- Placeholders nas queries da app: ``%s`` (psycopg). Em SQLite, :func:`adapt_sql` converte para ``?``.
+- ``?`` residual é ainda convertido para ``%s`` em PostgreSQL (compatibilidade).
+- PostgreSQL sem passar por adapt: :func:`pg_execute_no_prepare` (cursor + ``prepare=False``).
 - Não altera a semântica das queries; apenas o formato de bind e pequenos fragmentos
   expostos como :func:`sql_order_ci`.
 
@@ -113,9 +114,44 @@ def qmarks_to_percent_s(sql: str) -> str:
     return "".join(out)
 
 
+def percent_s_to_qmarks(sql: str) -> str:
+    """Troca ``%s`` por ``?`` fora de literais entre aspas simples (uso com SQLite)."""
+    out: list[str] = []
+    i = 0
+    n = len(sql)
+    in_single = False
+    while i < n:
+        c = sql[i]
+        if c == "'" and not in_single:
+            in_single = True
+            out.append(c)
+            i += 1
+            continue
+        if in_single:
+            if c == "'":
+                if i + 1 < n and sql[i + 1] == "'":
+                    out.append("''")
+                    i += 2
+                    continue
+                in_single = False
+                out.append(c)
+                i += 1
+                continue
+            out.append(c)
+            i += 1
+            continue
+        if i + 1 < n and sql[i : i + 2] == "%s":
+            out.append("?")
+            i += 2
+            continue
+        out.append(c)
+        i += 1
+    return "".join(out)
+
+
 def adapt_sql(sql: str) -> str:
     if get_db_provider() == "sqlite":
-        return sql
+        return percent_s_to_qmarks(sql)
     return qmarks_to_percent_s(sql)
 
 

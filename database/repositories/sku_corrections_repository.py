@@ -42,10 +42,10 @@ def sku_correction_block_reason(
             """
             SELECT COALESCE(SUM(stock), 0) AS st,
                    COALESCE(MAX(CASE WHEN pricing_locked = 1 THEN 1 ELSE 0 END), 0) AS pl,
-                   COALESCE(MAX(CASE WHEN ABS(COALESCE(cost, 0)) >= ? THEN 1 ELSE 0 END), 0) AS pc,
-                   COALESCE(MAX(CASE WHEN ABS(COALESCE(price, 0)) >= ? THEN 1 ELSE 0 END), 0) AS pp
+                   COALESCE(MAX(CASE WHEN ABS(COALESCE(cost, 0)) >= %s THEN 1 ELSE 0 END), 0) AS pc,
+                   COALESCE(MAX(CASE WHEN ABS(COALESCE(price, 0)) >= %s THEN 1 ELSE 0 END), 0) AS pp
             FROM products
-            WHERE tenant_id = ? AND sku = ? AND deleted_at IS NULL;
+            WHERE tenant_id = %s AND sku = %s AND deleted_at IS NULL;
             """,
             (_MONEY_EPS, _MONEY_EPS, tid, sku),
         ).fetchone()
@@ -62,7 +62,7 @@ def sku_correction_block_reason(
         sm = db_execute(conn,
             """
             SELECT avg_unit_cost, selling_price, structured_cost_total, deleted_at
-            FROM sku_master WHERE tenant_id = ? AND sku = ?;
+            FROM sku_master WHERE tenant_id = %s AND sku = %s;
             """,
             (tid, sku),
         ).fetchone()
@@ -76,7 +76,7 @@ def sku_correction_block_reason(
 
         n = int(
             db_execute(conn,
-                "SELECT COUNT(*) AS c FROM stock_cost_entries WHERE tenant_id = ? AND sku = ?;",
+                "SELECT COUNT(*) AS c FROM stock_cost_entries WHERE tenant_id = %s AND sku = %s;",
                 (tid, sku),
             ).fetchone()["c"]
         )
@@ -87,7 +87,7 @@ def sku_correction_block_reason(
 
         n = int(
             db_execute(conn,
-                "SELECT COUNT(*) AS c FROM price_history WHERE tenant_id = ? AND sku = ?;",
+                "SELECT COUNT(*) AS c FROM price_history WHERE tenant_id = %s AND sku = %s;",
                 (tid, sku),
             ).fetchone()["c"]
         )
@@ -96,7 +96,7 @@ def sku_correction_block_reason(
 
         n = int(
             db_execute(conn,
-                "SELECT COUNT(*) AS c FROM sku_pricing_records WHERE tenant_id = ? AND sku = ?;",
+                "SELECT COUNT(*) AS c FROM sku_pricing_records WHERE tenant_id = %s AND sku = %s;",
                 (tid, sku),
             ).fetchone()["c"]
         )
@@ -106,7 +106,7 @@ def sku_correction_block_reason(
         lt = db_execute(conn,
             """
             SELECT COALESCE(SUM(line_total), 0) AS t
-            FROM sku_cost_components WHERE tenant_id = ? AND sku = ?;
+            FROM sku_cost_components WHERE tenant_id = %s AND sku = %s;
             """,
             (tid, sku),
         ).fetchone()
@@ -117,9 +117,9 @@ def sku_correction_block_reason(
             db_execute(conn,
                 """
                 SELECT COUNT(*) AS c FROM sales
-                WHERE tenant_id = ?
-                  AND (TRIM(COALESCE(sku, '')) = ?
-                   OR product_id IN (SELECT id FROM products WHERE tenant_id = ? AND sku = ?));
+                WHERE tenant_id = %s
+                  AND (TRIM(COALESCE(sku, '')) = %s
+                   OR product_id IN (SELECT id FROM products WHERE tenant_id = %s AND sku = %s));
                 """,
                 (tid, sku, tid, sku),
             ).fetchone()["c"]
@@ -159,29 +159,29 @@ def hard_delete_sku_catalog(
     with use_connection(None) as conn:
         with transaction(conn, immediate=True):
             for r in db_execute(conn,
-                "SELECT product_image_path FROM products WHERE tenant_id = ? AND sku = ?;",
+                "SELECT product_image_path FROM products WHERE tenant_id = %s AND sku = %s;",
                 (tid, sku),
             ).fetchall():
                 delete_product_image_file(r["product_image_path"])
             db_execute(conn,
-                "DELETE FROM sku_cost_components WHERE tenant_id = ? AND sku = ?;",
+                "DELETE FROM sku_cost_components WHERE tenant_id = %s AND sku = %s;",
                 (tid, sku),
             )
             cur = db_execute(conn,
-                "DELETE FROM products WHERE tenant_id = ? AND sku = ?;",
+                "DELETE FROM products WHERE tenant_id = %s AND sku = %s;",
                 (tid, sku),
             )
             n = int(cur.rowcount or 0)
             if n < 1:
                 raise ValueError("Nenhum produto encontrado para este SKU.")
             db_execute(conn,
-                "DELETE FROM sku_master WHERE tenant_id = ? AND sku = ?;",
+                "DELETE FROM sku_master WHERE tenant_id = %s AND sku = %s;",
                 (tid, sku),
             )
             db_execute(conn,
                 """
                 INSERT INTO sku_deletion_audit (tenant_id, sku, deleted_at, deleted_by, note)
-                VALUES (?, ?, ?, ?, ?);
+                VALUES (%s, %s, %s, %s, %s);
                 """,
                 (tid, sku, now, deleted_by, note_txt or "hard_delete_sku_catalog"),
             )

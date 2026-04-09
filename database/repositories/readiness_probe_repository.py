@@ -21,7 +21,7 @@ def ensure_readiness_probe_sequence_counters(
         (
             """
             INSERT INTO sku_sequence_counter (tenant_id, id, last_value)
-            VALUES (?, 1, 0)
+            VALUES (%s, 1, 0)
             ON CONFLICT (tenant_id, id) DO NOTHING
             """,
             (tid,),
@@ -29,7 +29,7 @@ def ensure_readiness_probe_sequence_counters(
         (
             """
             INSERT INTO customer_sequence_counter (tenant_id, id, last_value)
-            VALUES (?, 1, 0)
+            VALUES (%s, 1, 0)
             ON CONFLICT (tenant_id, id) DO NOTHING
             """,
             (tid,),
@@ -37,7 +37,7 @@ def ensure_readiness_probe_sequence_counters(
         (
             """
             INSERT INTO sale_sequence_counter (tenant_id, id, last_value)
-            VALUES (?, 1, 0)
+            VALUES (%s, 1, 0)
             ON CONFLICT (tenant_id, id) DO NOTHING
             """,
             (tid,),
@@ -51,17 +51,17 @@ def delete_readiness_probe_tenant_data(conn: DbConnection, tenant_id: str) -> No
     """Apaga todas as linhas do tenant de probe (ordem segura de FKs)."""
     tid = effective_tenant_id_for_request(tenant_id)
     deletes = [
-        "DELETE FROM sales WHERE tenant_id = ?",
-        "DELETE FROM stock_cost_entries WHERE tenant_id = ?",
-        "DELETE FROM sku_pricing_records WHERE tenant_id = ?",
-        "DELETE FROM sku_cost_components WHERE tenant_id = ?",
-        "DELETE FROM price_history WHERE tenant_id = ?",
-        "DELETE FROM products WHERE tenant_id = ?",
-        "DELETE FROM customers WHERE tenant_id = ?",
-        "DELETE FROM sku_master WHERE tenant_id = ?",
-        "DELETE FROM sku_sequence_counter WHERE tenant_id = ?",
-        "DELETE FROM customer_sequence_counter WHERE tenant_id = ?",
-        "DELETE FROM sale_sequence_counter WHERE tenant_id = ?",
+        "DELETE FROM sales WHERE tenant_id = %s",
+        "DELETE FROM stock_cost_entries WHERE tenant_id = %s",
+        "DELETE FROM sku_pricing_records WHERE tenant_id = %s",
+        "DELETE FROM sku_cost_components WHERE tenant_id = %s",
+        "DELETE FROM price_history WHERE tenant_id = %s",
+        "DELETE FROM products WHERE tenant_id = %s",
+        "DELETE FROM customers WHERE tenant_id = %s",
+        "DELETE FROM sku_master WHERE tenant_id = %s",
+        "DELETE FROM sku_sequence_counter WHERE tenant_id = %s",
+        "DELETE FROM customer_sequence_counter WHERE tenant_id = %s",
+        "DELETE FROM sale_sequence_counter WHERE tenant_id = %s",
     ]
     for q in deletes:
         db_execute(conn, q, (tid,))

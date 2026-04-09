@@ -32,7 +32,7 @@ def get_customer_row_for_sale(
         tid = effective_tenant_id_for_request(tenant_id)
         return db_execute(
             c,
-            "SELECT id FROM customers WHERE tenant_id = ? AND id = ?;",
+            "SELECT id FROM customers WHERE tenant_id = %s AND id = %s;",
             (tid, int(customer_id)),
         ).fetchone()
 
@@ -53,7 +53,7 @@ def get_product_row_for_sale(
                    COALESCE(sm.avg_unit_cost, 0) AS avg_cogs
             FROM products p
             LEFT JOIN sku_master sm ON sm.sku = p.sku AND sm.tenant_id = p.tenant_id
-            WHERE p.tenant_id = ? AND p.id = ?;
+            WHERE p.tenant_id = %s AND p.id = %s;
             """,
             (tid, product_id),
         ).fetchone()
@@ -78,7 +78,7 @@ def create_sale_with_stock_decrement(
         tid = effective_tenant_id_for_request(tenant_id)
         db_execute(
             c,
-            "UPDATE products SET stock = stock - ? WHERE tenant_id = ? AND id = ?;",
+            "UPDATE products SET stock = stock - %s WHERE tenant_id = %s AND id = %s;",
             (qty, tid, product_id),
         )
         sync_sku_master_totals(c, sku, tenant_id=tid)
@@ -92,7 +92,7 @@ def create_sale_with_stock_decrement(
             INSERT INTO sales (
                 tenant_id, sale_code, product_id, customer_id, quantity, unit_price, discount_amount,
                 base_amount, total, sold_at, sku, cogs_total, payment_method
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s);
             """,
             (
                 tid,
@@ -127,7 +127,7 @@ def fetch_sale_row_by_code(
             """
             SELECT id, customer_id, product_id, quantity, total, sku
             FROM sales
-            WHERE tenant_id = ? AND sale_code = ?;
+            WHERE tenant_id = %s AND sale_code = %s;
             """,
             (tid, str(sale_code).strip()),
         ).fetchone()
@@ -162,9 +162,9 @@ def get_recent_sales_rows(
             FROM sales s
             JOIN products p ON p.tenant_id = s.tenant_id AND p.id = s.product_id
             LEFT JOIN customers c ON c.tenant_id = s.tenant_id AND c.id = s.customer_id
-            WHERE s.tenant_id = ?
+            WHERE s.tenant_id = %s
             ORDER BY s.id DESC
-            LIMIT ?;
+            LIMIT %s;
             """,
             (tid, int(limit)),
         ).fetchall()

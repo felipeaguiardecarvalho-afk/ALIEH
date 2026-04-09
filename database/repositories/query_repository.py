@@ -31,7 +31,7 @@ def fetch_customers_ordered(tenant_id: str | None = None) -> list:
                    zip_code, street, number, neighborhood, city, state, country,
                    created_at, updated_at
             FROM customers
-            WHERE tenant_id = ?
+            WHERE tenant_id = %s
             ORDER BY {sql_numeric_sort_key_text("customer_code")};
             """,
             (tid,),
@@ -44,7 +44,7 @@ def peek_next_customer_code_preview(tenant_id: str | None = None) -> str:
     with use_connection(None) as conn:
         row = db_execute(
             conn,
-            "SELECT last_value FROM customer_sequence_counter WHERE tenant_id = ? AND id = 1;",
+            "SELECT last_value FROM customer_sequence_counter WHERE tenant_id = %s AND id = 1;",
             (tid,),
         ).fetchone()
         n = int(row["last_value"] or 0) + 1 if row else 1
@@ -68,7 +68,7 @@ def fetch_skus_available_for_sale(tenant_id: str | None = None) -> list:
                        ORDER BY p.id LIMIT 1
                    ) AS sample_name
             FROM sku_master sm
-            WHERE sm.tenant_id = ?
+            WHERE sm.tenant_id = %s
               AND sm.deleted_at IS NULL
               AND COALESCE(sm.selling_price, 0) > 0
               AND COALESCE(sm.total_stock, 0) > 0
@@ -93,7 +93,7 @@ def fetch_product_batches_in_stock_for_sku(
             SELECT p.id, p.name, p.stock, p.product_enter_code,
                    p.frame_color, p.lens_color, p.style, p.palette, p.gender
             FROM products p
-            WHERE p.tenant_id = ? AND p.sku = ? AND p.deleted_at IS NULL
+            WHERE p.tenant_id = %s AND p.sku = %s AND p.deleted_at IS NULL
               AND COALESCE(p.stock, 0) > 0
             ORDER BY p.id;
             """,
@@ -115,9 +115,9 @@ def fetch_sku_pricing_records_for_sku(
                    markup_kind, taxes_kind, interest_kind,
                    price_before_taxes, price_with_taxes, target_price, created_at, is_active
             FROM sku_pricing_records
-            WHERE tenant_id = ? AND sku = ?
+            WHERE tenant_id = %s AND sku = %s
             ORDER BY id DESC
-            LIMIT ?;
+            LIMIT %s;
             """,
             (tid, sku, int(limit)),
         ).fetchall()
@@ -135,7 +135,7 @@ def fetch_active_sku_pricing_record(sku: str, tenant_id: str | None = None):
                    markup_kind, taxes_kind, interest_kind,
                    price_before_taxes, price_with_taxes, target_price, created_at, is_active
             FROM sku_pricing_records
-            WHERE tenant_id = ? AND sku = ? AND is_active = 1
+            WHERE tenant_id = %s AND sku = %s AND is_active = 1
             ORDER BY id DESC
             LIMIT 1;
             """,
@@ -151,7 +151,7 @@ def fetch_sku_master_rows(tenant_id: str | None = None):
             """
             SELECT sku, total_stock, avg_unit_cost, selling_price, structured_cost_total, updated_at
             FROM sku_master
-            WHERE tenant_id = ? AND deleted_at IS NULL
+            WHERE tenant_id = %s AND deleted_at IS NULL
             ORDER BY sku;
             """,
             (tid,),
@@ -171,7 +171,7 @@ def fetch_product_triple_label_by_sku(tenant_id: str | None = None) -> dict[str,
                    MIN(TRIM(COALESCE(frame_color, ''))) AS fc,
                    MIN(TRIM(COALESCE(lens_color, ''))) AS lc
             FROM products
-            WHERE tenant_id = ? AND deleted_at IS NULL
+            WHERE tenant_id = %s AND deleted_at IS NULL
               AND sku IS NOT NULL
               AND TRIM(COALESCE(sku, '')) != ''
             GROUP BY sku;
@@ -197,9 +197,9 @@ def fetch_recent_stock_cost_entries(limit: int = 50, tenant_id: str | None = Non
             SELECT id, sku, product_id, quantity, unit_cost, total_entry_cost, stock_before, stock_after,
                    avg_cost_before, avg_cost_after, created_at
             FROM stock_cost_entries
-            WHERE tenant_id = ?
+            WHERE tenant_id = %s
             ORDER BY id DESC
-            LIMIT ?;
+            LIMIT %s;
             """,
             (tid, int(limit)),
         ).fetchall()
@@ -217,7 +217,7 @@ def get_persisted_structured_unit_cost(sku: str, tenant_id: str | None = None) -
             conn,
             """
             SELECT COALESCE(structured_cost_total, 0) AS t, deleted_at
-            FROM sku_master WHERE tenant_id = ? AND sku = ?;
+            FROM sku_master WHERE tenant_id = %s AND sku = %s;
             """,
             (tid, sku),
         ).fetchone()
@@ -239,7 +239,7 @@ def fetch_product_batches_for_sku(sku: str, tenant_id: str | None = None) -> lis
             SELECT id, name, sku, registered_date, product_enter_code, cost, price, pricing_locked, stock,
                    frame_color, lens_color, style, palette, gender
             FROM products
-            WHERE tenant_id = ? AND TRIM(COALESCE(sku, '')) = ?
+            WHERE tenant_id = %s AND TRIM(COALESCE(sku, '')) = %s
               AND deleted_at IS NULL
             ORDER BY id DESC;
             """,
@@ -255,9 +255,9 @@ def fetch_price_history_for_sku(sku: str, limit: int = 40, tenant_id: str | None
             """
             SELECT id, sku, old_price, new_price, created_at, note
             FROM price_history
-            WHERE tenant_id = ? AND sku = ?
+            WHERE tenant_id = %s AND sku = %s
             ORDER BY id DESC
-            LIMIT ?;
+            LIMIT %s;
             """,
             (tid, sku.strip(), int(limit)),
         ).fetchall()
@@ -275,7 +275,7 @@ def fetch_sku_cost_components_for_sku(sku: str, tenant_id: str | None = None) ->
             """
             SELECT component_key, label, unit_price, quantity, line_total, updated_at
             FROM sku_cost_components
-            WHERE tenant_id = ? AND sku = ?;
+            WHERE tenant_id = %s AND sku = %s;
             """,
             (tid, sku),
         ).fetchall()
@@ -318,7 +318,7 @@ def fetch_products(tenant_id: str | None = None):
             SELECT id, name, sku, registered_date, product_enter_code, cost, price, pricing_locked, stock,
                    frame_color, lens_color, style, palette, gender
             FROM products
-            WHERE tenant_id = ? AND deleted_at IS NULL
+            WHERE tenant_id = %s AND deleted_at IS NULL
             ORDER BY id DESC
             """,
             (tid,),
@@ -353,7 +353,7 @@ def fetch_product_search_attribute_options(tenant_id: str | None = None) -> dict
                 SELECT v FROM (
                     SELECT DISTINCT TRIM({col}) AS v
                     FROM products
-                    WHERE tenant_id = ?
+                    WHERE tenant_id = %s
                       AND {col} IS NOT NULL AND TRIM({col}) != ''
                       AND deleted_at IS NULL
                 ) AS attribute_opts
@@ -383,12 +383,12 @@ def search_products_filtered(
     """
     tid = effective_tenant_id_for_request(tenant_id)
     sanitized_search = _sku_search_sanitize_text(text_q)
-    wheres = ["p.tenant_id = ?", "p.deleted_at IS NULL"]
+    wheres = ["p.tenant_id = %s", "p.deleted_at IS NULL"]
     params: list = [tid]
     if sanitized_search:
         like_pattern = f"%{sanitized_search}%"
         wheres.append(
-            "(LOWER(COALESCE(p.sku, '')) LIKE ? OR LOWER(COALESCE(p.name, '')) LIKE ?)"
+            "(LOWER(COALESCE(p.sku, '')) LIKE %s OR LOWER(COALESCE(p.name, '')) LIKE %s)"
         )
         params.extend([like_pattern, like_pattern])
 
@@ -400,7 +400,7 @@ def search_products_filtered(
         (style_filter, "p.style"),
     ]:
         if val and str(val).strip() and str(val) != FILTER_ANY:
-            wheres.append(f"TRIM(COALESCE({pcol}, '')) = ?")
+            wheres.append(f"TRIM(COALESCE({pcol}, '')) = %s")
             params.append(str(val).strip())
 
     where_sql = " AND ".join(wheres)
@@ -425,7 +425,7 @@ def search_products_filtered(
         {base_from}
         WHERE {where_sql}
         ORDER BY {order_sql}
-        LIMIT ? OFFSET ?
+        LIMIT %s OFFSET %s
     """
     lim = max(1, min(int(limit), 500))
     off = max(0, int(offset))
@@ -450,7 +450,7 @@ def fetch_product_by_id(product_id: int, tenant_id: str | None = None):
             FROM products p
             LEFT JOIN sku_master sm ON sm.sku = p.sku AND sm.tenant_id = p.tenant_id
                 AND sm.deleted_at IS NULL
-            WHERE p.tenant_id = ? AND p.id = ? AND p.deleted_at IS NULL;
+            WHERE p.tenant_id = %s AND p.id = %s AND p.deleted_at IS NULL;
             """,
             (tid, int(product_id)),
         ).fetchone()
@@ -461,18 +461,18 @@ def compute_dashboard(tenant_id: str | None = None):
     with use_connection(None) as conn:
         revenue = db_execute(
             conn,
-            "SELECT COALESCE(SUM(total), 0) AS revenue FROM sales WHERE tenant_id = ?;",
+            "SELECT COALESCE(SUM(total), 0) AS revenue FROM sales WHERE tenant_id = %s;",
             (tid,),
         ).fetchone()["revenue"]
         sales_count = db_execute(
             conn,
-            "SELECT COUNT(*) AS cnt FROM sales WHERE tenant_id = ?;",
+            "SELECT COUNT(*) AS cnt FROM sales WHERE tenant_id = %s;",
             (tid,),
         ).fetchone()["cnt"]
         total_stock_units = float(
             db_execute(
                 conn,
-                "SELECT COALESCE(SUM(stock), 0) AS cnt FROM products WHERE tenant_id = ?;",
+                "SELECT COALESCE(SUM(stock), 0) AS cnt FROM products WHERE tenant_id = %s;",
                 (tid,),
             ).fetchone()["cnt"]
         )
@@ -481,7 +481,7 @@ def compute_dashboard(tenant_id: str | None = None):
             """
             SELECT COUNT(*) AS cnt
             FROM products
-            WHERE tenant_id = ? AND stock <= 5
+            WHERE tenant_id = %s AND stock <= 5
             """,
             (tid,),
         ).fetchone()["cnt"]
@@ -510,7 +510,7 @@ def compute_sales_financials(tenant_id: str | None = None):
                 COALESCE(SUM(s.total), 0) AS revenue,
                 COALESCE(SUM(s.cogs_total), 0) AS cost
             FROM sales s
-            WHERE s.tenant_id = ?;
+            WHERE s.tenant_id = %s;
             """,
             (tid,),
         ).fetchone()
@@ -532,7 +532,7 @@ def fetch_revenue_timeseries(tenant_id: str | None = None):
                 substr(sold_at, 1, 10) AS day,
                 SUM(total) AS revenue
             FROM sales
-            WHERE tenant_id = ?
+            WHERE tenant_id = %s
             GROUP BY day
             ORDER BY day;
             """,
@@ -559,19 +559,19 @@ def _painel_sales_where(
     product_id: Optional[int] = None,
 ) -> tuple[str, list[Any]]:
     clauses = [
-        "s.tenant_id = ?",
-        "substr(s.sold_at, 1, 10) >= ?",
-        "substr(s.sold_at, 1, 10) <= ?",
+        "s.tenant_id = %s",
+        "substr(s.sold_at, 1, 10) >= %s",
+        "substr(s.sold_at, 1, 10) <= %s",
     ]
     params: list[Any] = [tenant_id, date_start, date_end]
     if sku is not None and str(sku).strip():
-        clauses.append("TRIM(COALESCE(s.sku, '')) = ?")
+        clauses.append("TRIM(COALESCE(s.sku, '')) = %s")
         params.append(str(sku).strip())
     if customer_id is not None:
-        clauses.append("s.customer_id = ?")
+        clauses.append("s.customer_id = %s")
         params.append(int(customer_id))
     if product_id is not None:
-        clauses.append("s.product_id = ?")
+        clauses.append("s.product_id = %s")
         params.append(int(product_id))
     return " AND ".join(clauses), params
 
@@ -587,7 +587,7 @@ def fetch_sales_date_bounds(tenant_id: str | None = None) -> tuple[Optional[str]
                 MIN(substr(sold_at, 1, 10)) AS d0,
                 MAX(substr(sold_at, 1, 10)) AS d1
             FROM sales
-            WHERE tenant_id = ?;
+            WHERE tenant_id = %s;
             """,
             (tid,),
         ).fetchone()
@@ -717,7 +717,7 @@ def fetch_top_skus_by_qty(
               AND s.sku IS NOT NULL AND TRIM(s.sku) != ''
             GROUP BY TRIM(s.sku)
             ORDER BY qty DESC
-            LIMIT ?;
+            LIMIT %s;
             """,
             params + [lim],
         ).fetchall()
@@ -764,7 +764,7 @@ def fetch_top_skus_by_metric(
               AND s.sku IS NOT NULL AND TRIM(s.sku) != ''
             GROUP BY TRIM(s.sku)
             ORDER BY revenue DESC
-            LIMIT ?;
+            LIMIT %s;
             """,
             params + [lim],
         ).fetchall()
@@ -811,7 +811,7 @@ def fetch_top_product_names_by_revenue(
             WHERE {where}
             GROUP BY p.name
             ORDER BY revenue DESC
-            LIMIT ?;
+            LIMIT %s;
             """,
             params + [lim],
         ).fetchall()
@@ -902,7 +902,7 @@ def fetch_top_customers_by_revenue(
               AND s.customer_id IS NOT NULL
             GROUP BY s.customer_id
             ORDER BY revenue DESC
-            LIMIT ?;
+            LIMIT %s;
             """,
             params + [lim],
         ).fetchall()
@@ -962,7 +962,7 @@ def count_customers_total(tenant_id: str | None = None) -> int:
     with use_connection(None) as conn:
         row = db_execute(
             conn,
-            "SELECT COUNT(*) AS c FROM customers WHERE tenant_id = ?;",
+            "SELECT COUNT(*) AS c FROM customers WHERE tenant_id = %s;",
             (tid,),
         ).fetchone()
     return int(row["c"] or 0)
@@ -990,11 +990,11 @@ def fetch_low_stock_products_dashboard(
             FROM products p
             LEFT JOIN sku_master sm
                 ON sm.tenant_id = p.tenant_id AND sm.sku = p.sku AND sm.deleted_at IS NULL
-            WHERE p.tenant_id = ?
+            WHERE p.tenant_id = %s
               AND p.deleted_at IS NULL
-              AND COALESCE(p.stock, 0) <= ?
+              AND COALESCE(p.stock, 0) <= %s
             ORDER BY p.stock ASC, p.id DESC
-            LIMIT ?;
+            LIMIT %s;
             """,
             (tid, thr, lim),
         ).fetchall()
@@ -1030,7 +1030,7 @@ def fetch_inventory_stock_summary(tenant_id: str | None = None) -> dict[str, Any
             FROM products p
             LEFT JOIN sku_master sm
                 ON sm.tenant_id = p.tenant_id AND sm.sku = p.sku AND sm.deleted_at IS NULL
-            WHERE p.tenant_id = ? AND p.deleted_at IS NULL;
+            WHERE p.tenant_id = %s AND p.deleted_at IS NULL;
             """,
             (tid,),
         ).fetchone()
@@ -1039,7 +1039,7 @@ def fetch_inventory_stock_summary(tenant_id: str | None = None) -> dict[str, Any
             """
             SELECT COUNT(*) AS c
             FROM products
-            WHERE tenant_id = ? AND deleted_at IS NULL AND COALESCE(stock, 0) <= 5;
+            WHERE tenant_id = %s AND deleted_at IS NULL AND COALESCE(stock, 0) <= 5;
             """,
             (tid,),
         ).fetchone()
@@ -1062,10 +1062,10 @@ def fetch_stock_distribution_top_skus(
             """
             SELECT sku, total_stock
             FROM sku_master
-            WHERE tenant_id = ? AND deleted_at IS NULL
+            WHERE tenant_id = %s AND deleted_at IS NULL
               AND COALESCE(total_stock, 0) > 0
             ORDER BY total_stock DESC
-            LIMIT ?;
+            LIMIT %s;
             """,
             (tid, lim),
         ).fetchall()
@@ -1099,18 +1099,18 @@ def fetch_skus_no_recent_sales(
                 """
                 SELECT sm.sku, sm.total_stock
                 FROM sku_master sm
-                WHERE sm.tenant_id = ?
+                WHERE sm.tenant_id = %s
                   AND sm.deleted_at IS NULL
-                  AND COALESCE(sm.total_stock, 0) >= ?
+                  AND COALESCE(sm.total_stock, 0) >= %s
                   AND NOT EXISTS (
                       SELECT 1 FROM sales s
                       WHERE s.tenant_id = sm.tenant_id
                         AND TRIM(COALESCE(s.sku, '')) = TRIM(sm.sku)
-                        AND substr(s.sold_at, 1, 10) >= ?
-                        AND substr(s.sold_at, 1, 10) <= ?
+                        AND substr(s.sold_at, 1, 10) >= %s
+                        AND substr(s.sold_at, 1, 10) <= %s
                   )
                 ORDER BY sm.total_stock DESC
-                LIMIT ?;
+                LIMIT %s;
                 """,
                 (tid, float(min_stock), since_day, until_day, lim),
             ).fetchall()
@@ -1120,17 +1120,17 @@ def fetch_skus_no_recent_sales(
                 """
                 SELECT sm.sku, sm.total_stock
                 FROM sku_master sm
-                WHERE sm.tenant_id = ?
+                WHERE sm.tenant_id = %s
                   AND sm.deleted_at IS NULL
-                  AND COALESCE(sm.total_stock, 0) >= ?
+                  AND COALESCE(sm.total_stock, 0) >= %s
                   AND NOT EXISTS (
                       SELECT 1 FROM sales s
                       WHERE s.tenant_id = sm.tenant_id
                         AND TRIM(COALESCE(s.sku, '')) = TRIM(sm.sku)
-                        AND substr(s.sold_at, 1, 10) >= ?
+                        AND substr(s.sold_at, 1, 10) >= %s
                   )
                 ORDER BY sm.total_stock DESC
-                LIMIT ?;
+                LIMIT %s;
                 """,
                 (tid, float(min_stock), since_day, lim),
             ).fetchall()
@@ -1170,7 +1170,7 @@ def fetch_ranked_skus_profit(
               AND s.sku IS NOT NULL AND TRIM(s.sku) != ''
             GROUP BY TRIM(s.sku)
             ORDER BY profit DESC
-            LIMIT ?;
+            LIMIT %s;
             """,
             params + [lim],
         ).fetchall()
@@ -1219,7 +1219,7 @@ def fetch_skus_lowest_qty_sales(
             GROUP BY TRIM(s.sku)
             HAVING COALESCE(SUM(s.quantity), 0) > 0
             ORDER BY qty ASC
-            LIMIT ?;
+            LIMIT %s;
             """,
             params + [lim],
         ).fetchall()
@@ -1250,9 +1250,9 @@ def count_customers_with_sales_since(
             """
             SELECT COUNT(DISTINCT customer_id) AS c
             FROM sales
-            WHERE tenant_id = ?
+            WHERE tenant_id = %s
               AND customer_id IS NOT NULL
-              AND substr(sold_at, 1, 10) >= ?;
+              AND substr(sold_at, 1, 10) >= %s;
             """,
             (tid, since_day),
         ).fetchone()
@@ -1288,7 +1288,7 @@ def fetch_product_sales_rankings(
             WHERE {where}
             GROUP BY p.name
             ORDER BY qty DESC
-            LIMIT ?;
+            LIMIT %s;
             """,
             params + [lim],
         ).fetchall()
@@ -1305,7 +1305,7 @@ def fetch_product_sales_rankings(
             WHERE {where}
             GROUP BY p.name
             ORDER BY profit DESC
-            LIMIT ?;
+            LIMIT %s;
             """,
             params + [lim],
         ).fetchall()

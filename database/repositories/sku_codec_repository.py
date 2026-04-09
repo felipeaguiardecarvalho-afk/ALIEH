@@ -155,16 +155,16 @@ def sku_base_body_exists(
     sql = f"""
         SELECT 1 AS ok
         FROM products
-        WHERE tenant_id = ?
+        WHERE tenant_id = %s
           AND deleted_at IS NULL
           AND sku IS NOT NULL AND TRIM(sku) != ''
           AND (
             {body_expr}
-          ) = ?
+          ) = %s
     """
     params: list = [tid, base_sku]
     if exclude_product_id is not None:
-        sql += " AND id != ?"
+        sql += " AND id != %s"
         params.append(int(exclude_product_id))
     sql += " LIMIT 1;"
     row = db_execute(conn, sql, params).fetchone()
@@ -179,7 +179,7 @@ def _next_sku_sequence(
         """
         UPDATE sku_sequence_counter
         SET last_value = last_value + 1
-        WHERE tenant_id = ? AND id = 1
+        WHERE tenant_id = %s AND id = 1
         RETURNING last_value;
         """,
         (tenant_id,),
@@ -198,7 +198,7 @@ def sync_sku_sequence_counter_from_skus(
         conn,
         """
         SELECT sku FROM products
-        WHERE tenant_id = ? AND sku IS NOT NULL AND TRIM(sku) != '';
+        WHERE tenant_id = %s AND sku IS NOT NULL AND TRIM(sku) != '';
         """,
         (tenant_id,),
     ):
@@ -212,7 +212,7 @@ def sync_sku_sequence_counter_from_skus(
         conn,
         """
         SELECT sku FROM sku_master
-        WHERE tenant_id = ? AND sku IS NOT NULL AND TRIM(sku) != '';
+        WHERE tenant_id = %s AND sku IS NOT NULL AND TRIM(sku) != '';
         """,
         (tenant_id,),
     ):
@@ -224,12 +224,12 @@ def sync_sku_sequence_counter_from_skus(
                 pass
     row = db_execute(
         conn,
-        "SELECT last_value FROM sku_sequence_counter WHERE tenant_id = ? AND id = 1;",
+        "SELECT last_value FROM sku_sequence_counter WHERE tenant_id = %s AND id = 1;",
         (tenant_id,),
     ).fetchone()
     cur = int(row["last_value"] or 0) if row else 0
     db_execute(
         conn,
-        "UPDATE sku_sequence_counter SET last_value = ? WHERE tenant_id = ? AND id = 1;",
+        "UPDATE sku_sequence_counter SET last_value = %s WHERE tenant_id = %s AND id = 1;",
         (max(max_n, cur), tenant_id),
     )

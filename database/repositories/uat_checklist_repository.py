@@ -93,7 +93,7 @@ def fetch_map_for_tenant(tenant_id: str) -> dict[str, dict[str, Any]]:
             SELECT test_id, status, notes, result_recorded_at,
                    recorded_by_username, recorded_by_user_id, recorded_by_role, updated_at
             FROM uat_manual_checklist
-            WHERE tenant_id = ?;
+            WHERE tenant_id = %s;
             """,
             (tid,),
         ).fetchall()
@@ -131,7 +131,7 @@ def upsert_uat_record(
             INSERT INTO uat_manual_checklist (
                 tenant_id, test_id, status, notes, result_recorded_at,
                 recorded_by_username, recorded_by_user_id, recorded_by_role, updated_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
             ON CONFLICT(tenant_id, test_id) DO UPDATE SET
                 status = excluded.status,
                 notes = excluded.notes,

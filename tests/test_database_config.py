@@ -187,6 +187,10 @@ def test_get_postgres_conn_uses_supabase_url(reload_db_config, monkeypatch):
         assert p.call_args.args[0] == "postgresql://user:pass@localhost:5432/db?sslmode=require"
         assert p.call_args.kwargs.get("autocommit") is True
         assert p.call_args.kwargs.get("connect_timeout") == 10
+        assert p.call_args.kwargs.get("keepalives") == 1
+        assert p.call_args.kwargs.get("keepalives_idle") == 30
+        assert p.call_args.kwargs.get("keepalives_interval") == 10
+        assert p.call_args.kwargs.get("keepalives_count") == 5
         assert p.call_args.kwargs.get("prepare_threshold") == 0
         assert p.call_args.kwargs.get("sslmode") == "require"
 
@@ -225,7 +229,10 @@ def test_get_postgres_conn_preserves_existing_sslmode(reload_db_config, monkeypa
         assert p.call_args.kwargs.get("sslmode") == "verify-full"
 
 
-def test_get_postgres_conn_connect_timeout_env(reload_db_config, monkeypatch):
+def test_get_postgres_conn_uses_fixed_connect_timeout_and_keepalives(
+    reload_db_config, monkeypatch
+):
+    """connect_timeout fixo (Cloud); DATABASE_CONNECT_TIMEOUT já não altera psycopg."""
     for k in ("DATABASE_URL", "POSTGRES_DSN", "ALIEH_DATABASE_URL"):
         monkeypatch.delenv(k, raising=False)
     reload_db_config(
@@ -241,6 +248,7 @@ def test_get_postgres_conn_connect_timeout_env(reload_db_config, monkeypatch):
     with patch.object(conn.psycopg, "connect", return_value=mock) as p:
         conn.get_postgres_conn()
         assert p.call_args.args[0] == "postgresql://user:pass@localhost:5432/db?sslmode=require"
-        assert p.call_args.kwargs.get("connect_timeout") == 45
+        assert p.call_args.kwargs.get("connect_timeout") == 10
+        assert p.call_args.kwargs.get("keepalives") == 1
 
 

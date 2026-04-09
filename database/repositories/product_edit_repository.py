@@ -34,7 +34,7 @@ def product_lot_edit_block_reason(product_id: int) -> Optional[str]:
         row = db_execute(conn,
             """
             SELECT stock, cost, price, pricing_locked, deleted_at, sku, tenant_id
-            FROM products WHERE id = ?;
+            FROM products WHERE id = %s;
             """,
             (pid,),
         ).fetchone()
@@ -51,7 +51,7 @@ def product_lot_edit_block_reason(product_id: int) -> Optional[str]:
             reasons.append("o lote está com precificação travada")
         sales_count = int(
             db_execute(conn,
-                "SELECT COUNT(*) AS c FROM sales WHERE tenant_id = ? AND product_id = ?;",
+                "SELECT COUNT(*) AS c FROM sales WHERE tenant_id = %s AND product_id = %s;",
                 (tid, pid),
             ).fetchone()["c"]
         )
@@ -61,7 +61,7 @@ def product_lot_edit_block_reason(product_id: int) -> Optional[str]:
             db_execute(conn,
                 """
                 SELECT COUNT(*) AS c FROM stock_cost_entries
-                WHERE tenant_id = ? AND product_id = ?;
+                WHERE tenant_id = %s AND product_id = %s;
                 """,
                 (tid, pid),
             ).fetchone()["c"]
@@ -76,7 +76,7 @@ def product_lot_edit_block_reason(product_id: int) -> Optional[str]:
                 db_execute(conn,
                     """
                     SELECT COALESCE(SUM(stock), 0) FROM products
-                    WHERE tenant_id = ? AND sku = ? AND deleted_at IS NULL;
+                    WHERE tenant_id = %s AND sku = %s AND deleted_at IS NULL;
                     """,
                     (tid, sku),
                 ).fetchone()[0]
@@ -87,7 +87,7 @@ def product_lot_edit_block_reason(product_id: int) -> Optional[str]:
             sku_master_row = db_execute(conn,
                 """
                 SELECT structured_cost_total, avg_unit_cost, selling_price, deleted_at
-                FROM sku_master WHERE tenant_id = ? AND sku = ?;
+                FROM sku_master WHERE tenant_id = %s AND sku = %s;
                 """,
                 (tid, sku),
             ).fetchone()
@@ -105,7 +105,7 @@ def product_lot_edit_block_reason(product_id: int) -> Optional[str]:
                 db_execute(conn,
                     """
                     SELECT COALESCE(SUM(line_total), 0) FROM sku_cost_components
-                    WHERE tenant_id = ? AND sku = ?;
+                    WHERE tenant_id = %s AND sku = %s;
                     """,
                     (tid, sku),
                 ).fetchone()[0]
@@ -118,7 +118,7 @@ def product_lot_edit_block_reason(product_id: int) -> Optional[str]:
 
             price_history_count = int(
                 db_execute(conn,
-                    "SELECT COUNT(*) AS c FROM price_history WHERE tenant_id = ? AND sku = ?;",
+                    "SELECT COUNT(*) AS c FROM price_history WHERE tenant_id = %s AND sku = %s;",
                     (tid, sku),
                 ).fetchone()["c"]
             )
@@ -128,7 +128,7 @@ def product_lot_edit_block_reason(product_id: int) -> Optional[str]:
                 db_execute(conn,
                     """
                     SELECT COUNT(*) AS c FROM sku_pricing_records
-                    WHERE tenant_id = ? AND sku = ?;
+                    WHERE tenant_id = %s AND sku = %s;
                     """,
                     (tid, sku),
                 ).fetchone()["c"]
@@ -154,7 +154,7 @@ def update_product_lot_photo(product_id: int, data: bytes, filename: str) -> Non
         row = db_execute(conn,
             """
             SELECT id, tenant_id FROM products
-            WHERE id = ? AND deleted_at IS NULL;
+            WHERE id = %s AND deleted_at IS NULL;
             """,
             (pid,),
         ).fetchone()
@@ -164,7 +164,7 @@ def update_product_lot_photo(product_id: int, data: bytes, filename: str) -> Non
     rel = save_product_image_file(pid, data, filename)
     with use_connection(None) as conn:
         db_execute(conn,
-            "UPDATE products SET product_image_path = ? WHERE tenant_id = ? AND id = ?;",
+            "UPDATE products SET product_image_path = %s WHERE tenant_id = %s AND id = %s;",
             (rel, tid, pid),
         )
 
@@ -219,7 +219,7 @@ def update_product_lot_attributes(
             row = db_execute(conn,
                 """
                 SELECT id, sku, tenant_id FROM products
-                WHERE id = ? AND deleted_at IS NULL;
+                WHERE id = %s AND deleted_at IS NULL;
                 """,
                 (pid,),
             ).fetchone()
@@ -238,13 +238,13 @@ def update_product_lot_attributes(
             duplicate_attrs_row = db_execute(conn,
                 """
                 SELECT id FROM products
-                WHERE tenant_id = ? AND name = ? AND registered_date = ?
-                  AND COALESCE(frame_color, '') = ?
-                  AND COALESCE(lens_color, '') = ?
-                  AND COALESCE(style, '') = ?
-                  AND COALESCE(palette, '') = ?
-                  AND COALESCE(gender, '') = ?
-                  AND deleted_at IS NULL AND id != ?;
+                WHERE tenant_id = %s AND name = %s AND registered_date = %s
+                  AND COALESCE(frame_color, '') = %s
+                  AND COALESCE(lens_color, '') = %s
+                  AND COALESCE(style, '') = %s
+                  AND COALESCE(palette, '') = %s
+                  AND COALESCE(gender, '') = %s
+                  AND deleted_at IS NULL AND id != %s;
                 """,
                 (
                     tid,
@@ -269,7 +269,7 @@ def update_product_lot_attributes(
             sku_taken_row = db_execute(conn,
                 """
                 SELECT id FROM products
-                WHERE tenant_id = ? AND sku = ? AND deleted_at IS NULL AND id != ?;
+                WHERE tenant_id = %s AND sku = %s AND deleted_at IS NULL AND id != %s;
                 """,
                 (tid, new_sku, pid),
             ).fetchone()
@@ -290,7 +290,7 @@ def update_product_lot_attributes(
                     db_execute(conn,
                         """
                         SELECT COUNT(*) AS c FROM products
-                        WHERE tenant_id = ? AND sku = ? AND deleted_at IS NULL AND id != ?;
+                        WHERE tenant_id = %s AND sku = %s AND deleted_at IS NULL AND id != %s;
                         """,
                         (tid, old_sku, pid),
                     ).fetchone()["c"]
@@ -301,7 +301,7 @@ def update_product_lot_attributes(
                         "atributos que mudam o código enquanto o SKU for partilhado."
                     )
                 master_rows_updated = db_execute(conn,
-                    "UPDATE sku_master SET sku = ? WHERE tenant_id = ? AND sku = ?;",
+                    "UPDATE sku_master SET sku = %s WHERE tenant_id = %s AND sku = %s;",
                     (new_sku, tid, old_sku),
                 ).rowcount
                 if int(master_rows_updated or 0) < 1:
@@ -310,8 +310,8 @@ def update_product_lot_attributes(
                     )
                 db_execute(conn,
                     """
-                    UPDATE sku_cost_components SET sku = ?
-                    WHERE tenant_id = ? AND sku = ?;
+                    UPDATE sku_cost_components SET sku = %s
+                    WHERE tenant_id = %s AND sku = %s;
                     """,
                     (new_sku, tid, old_sku),
                 )
@@ -322,9 +322,9 @@ def update_product_lot_attributes(
             db_execute(conn,
                 """
                 UPDATE products SET
-                    name = ?, sku = ?, registered_date = ?, product_enter_code = ?,
-                    frame_color = ?, lens_color = ?, style = ?, palette = ?, gender = ?
-                WHERE tenant_id = ? AND id = ?;
+                    name = %s, sku = %s, registered_date = %s, product_enter_code = %s,
+                    frame_color = %s, lens_color = %s, style = %s, palette = %s, gender = %s
+                WHERE tenant_id = %s AND id = %s;
                 """,
                 (
                     name,

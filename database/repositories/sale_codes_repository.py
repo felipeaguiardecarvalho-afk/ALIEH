@@ -20,7 +20,7 @@ def _next_sale_sequence(
         """
         UPDATE sale_sequence_counter
         SET last_value = last_value + 1
-        WHERE tenant_id = ? AND id = 1
+        WHERE tenant_id = %s AND id = 1
         RETURNING last_value;
         """,
         (tenant_id,),
@@ -38,7 +38,7 @@ def sync_sale_sequence_counter_from_sales(
     for row in db_execute(conn,
         """
         SELECT sale_code FROM sales
-        WHERE tenant_id = ?
+        WHERE tenant_id = %s
           AND sale_code IS NOT NULL AND TRIM(sale_code) != '';
         """,
         (tenant_id,),
@@ -48,11 +48,11 @@ def sync_sale_sequence_counter_from_sales(
         if m:
             max_n = max(max_n, int(m.group(1)))
     row2 = db_execute(conn,
-        "SELECT last_value FROM sale_sequence_counter WHERE tenant_id = ? AND id = 1;",
+        "SELECT last_value FROM sale_sequence_counter WHERE tenant_id = %s AND id = 1;",
         (tenant_id,),
     ).fetchone()
     cur = int(row2["last_value"] or 0) if row2 else 0
     db_execute(conn,
-        "UPDATE sale_sequence_counter SET last_value = ? WHERE tenant_id = ? AND id = 1;",
+        "UPDATE sale_sequence_counter SET last_value = %s WHERE tenant_id = %s AND id = 1;",
         (max(max_n, cur), tenant_id),
     )

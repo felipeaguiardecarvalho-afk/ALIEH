@@ -28,7 +28,7 @@ def ensure_sku_cost_component_rows(
                 """
                 INSERT OR IGNORE INTO sku_cost_components (
                     tenant_id, sku, component_key, label, unit_price, quantity, line_total, updated_at
-                ) VALUES (?, ?, ?, ?, 0, 0, 0, ?);
+                ) VALUES (%s, %s, %s, %s, 0, 0, 0, %s);
                 """,
                 (tid, sku, key, label, now),
             )
@@ -38,7 +38,7 @@ def ensure_sku_cost_component_rows(
                 """
                 INSERT INTO sku_cost_components (
                     tenant_id, sku, component_key, label, unit_price, quantity, line_total, updated_at
-                ) VALUES (?, ?, ?, ?, 0, 0, 0, ?)
+                ) VALUES (%s, %s, %s, %s, 0, 0, 0, %s)
                 ON CONFLICT (tenant_id, sku, component_key) DO NOTHING;
                 """,
                 (tid, sku, key, label, now),
@@ -46,8 +46,8 @@ def ensure_sku_cost_component_rows(
         db_execute(
             conn,
             """
-            UPDATE sku_cost_components SET label = ?
-            WHERE tenant_id = ? AND sku = ? AND component_key = ?;
+            UPDATE sku_cost_components SET label = %s
+            WHERE tenant_id = %s AND sku = %s AND component_key = %s;
             """,
             (label, tid, sku, key),
         )
@@ -68,8 +68,8 @@ def update_sku_cost_component_line(
         conn,
         """
         UPDATE sku_cost_components
-        SET unit_price = ?, quantity = ?, line_total = ?, updated_at = ?
-        WHERE tenant_id = ? AND sku = ? AND component_key = ?;
+        SET unit_price = %s, quantity = %s, line_total = %s, updated_at = %s
+        WHERE tenant_id = %s AND sku = %s AND component_key = %s;
         """,
         (unit_price, quantity, line_total, now, tid, sku, component_key),
     )
@@ -87,7 +87,7 @@ def recompute_sku_structured_cost_total(
         """
         SELECT COALESCE(SUM(line_total), 0) AS t
         FROM sku_cost_components
-        WHERE tenant_id = ? AND sku = ?;
+        WHERE tenant_id = %s AND sku = %s;
         """,
         (tid, sku),
     ).fetchone()
@@ -97,8 +97,8 @@ def recompute_sku_structured_cost_total(
         conn,
         """
         UPDATE sku_master
-        SET structured_cost_total = ?, updated_at = ?
-        WHERE tenant_id = ? AND sku = ?;
+        SET structured_cost_total = %s, updated_at = %s
+        WHERE tenant_id = %s AND sku = %s;
         """,
         (total, now, tid, sku),
     )

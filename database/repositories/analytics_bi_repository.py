@@ -48,7 +48,7 @@ def fetch_margin_by_sku(
               AND s.sku IS NOT NULL AND TRIM(s.sku) != ''
             GROUP BY TRIM(s.sku)
             ORDER BY revenue DESC
-            LIMIT ?;
+            LIMIT %s;
             """,
             params + [lim],
         ).fetchall()
@@ -111,7 +111,7 @@ def fetch_stock_turnover_by_sku(
             GROUP BY TRIM(s.sku)
             HAVING COALESCE(SUM(s.quantity), 0) > 0
             ORDER BY units_sold DESC
-            LIMIT ?;
+            LIMIT %s;
             """,
             params + [lim],
         ).fetchall()
@@ -152,7 +152,7 @@ def fetch_customer_cohort_by_first_purchase(
                     customer_id,
                     MIN(substr(sold_at, 1, 7)) AS cohort_month
                 FROM sales
-                WHERE tenant_id = ?
+                WHERE tenant_id = %s
                   AND customer_id IS NOT NULL
                 GROUP BY customer_id
             )
@@ -196,7 +196,7 @@ def fetch_sku_stock_aging(
             LEFT JOIN sales s
               ON s.tenant_id = sm.tenant_id
              AND TRIM(COALESCE(s.sku, '')) = TRIM(COALESCE(sm.sku, ''))
-            WHERE sm.tenant_id = ?
+            WHERE sm.tenant_id = %s
               AND sm.deleted_at IS NULL
               AND COALESCE(sm.total_stock, 0) > 0
             GROUP BY sm.sku, sm.total_stock

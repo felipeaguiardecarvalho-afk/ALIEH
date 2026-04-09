@@ -152,7 +152,9 @@ def replay_statement(
     *,
     pg_cursor: Any | None = None,
 ) -> None:
-    """Reexecuta ``sql_qmarks`` com ``?`` no SQLite da sombra e compara ``rowcount``."""
+    """Reexecuta o SQL no SQLite da sombra (``%s`` da app → ``?``) e compara ``rowcount``."""
+    from database.sql_compat import percent_s_to_qmarks
+
     sconn = get_active_shadow_connection()
     if sconn is None:
         return
@@ -162,8 +164,9 @@ def replay_statement(
             _preview(sql_qmarks),
         )
         return
+    sql_sqlite = percent_s_to_qmarks(sql_qmarks)
     try:
-        scur = sconn.execute(sql_qmarks, params)
+        scur = sconn.execute(sql_sqlite, params)
     except Exception as exc:
         _logger.error(
             "shadow replay falhou no SQLite | %s | %s: %s",

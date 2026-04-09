@@ -21,7 +21,7 @@ def sync_customer_sequence_counter_from_customers(
         f"""
         SELECT MAX(CAST(customer_code AS INTEGER)) AS m
         FROM customers
-        WHERE tenant_id = ?
+        WHERE tenant_id = %s
           {digit_filter};
         """,
         (tenant_id,),
@@ -29,12 +29,12 @@ def sync_customer_sequence_counter_from_customers(
     max_n = int(row["m"] or 0) if row else 0
     r2 = db_execute(
         conn,
-        "SELECT last_value FROM customer_sequence_counter WHERE tenant_id = ? AND id = 1;",
+        "SELECT last_value FROM customer_sequence_counter WHERE tenant_id = %s AND id = 1;",
         (tenant_id,),
     ).fetchone()
     cur = int(r2["last_value"] or 0) if r2 else 0
     db_execute(
         conn,
-        "UPDATE customer_sequence_counter SET last_value = ? WHERE tenant_id = ? AND id = 1;",
+        "UPDATE customer_sequence_counter SET last_value = %s WHERE tenant_id = %s AND id = 1;",
         (max(max_n, cur), tenant_id),
     )

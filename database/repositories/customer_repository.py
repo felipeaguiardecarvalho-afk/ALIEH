@@ -35,7 +35,7 @@ def update_customer_sequence_next(
             """
             UPDATE customer_sequence_counter
             SET last_value = last_value + 1
-            WHERE tenant_id = ? AND id = 1
+            WHERE tenant_id = %s AND id = 1
             RETURNING last_value;
             """,
             (tid,),
@@ -56,19 +56,19 @@ def get_customer_duplicate_row(
     with use_connection(conn) as c:
         tid = effective_tenant_id_for_request(tenant_id)
         if cpf_digits:
-            q = "SELECT id, customer_code, name, cpf, phone FROM customers WHERE tenant_id = ? AND cpf = ?"
+            q = "SELECT id, customer_code, name, cpf, phone FROM customers WHERE tenant_id = %s AND cpf = %s"
             params: list[Any] = [tid, cpf_digits]
             if exclude_id is not None:
-                q += " AND id != ?"
+                q += " AND id != %s"
                 params.append(exclude_id)
             row = db_execute(c, q, params).fetchone()
             if row:
                 return ("cpf", row)
         if phone_digits:
-            q = "SELECT id, customer_code, name, cpf, phone FROM customers WHERE tenant_id = ? AND phone = ?"
+            q = "SELECT id, customer_code, name, cpf, phone FROM customers WHERE tenant_id = %s AND phone = %s"
             params = [tid, phone_digits]
             if exclude_id is not None:
-                q += " AND id != ?"
+                q += " AND id != %s"
                 params.append(exclude_id)
             row = db_execute(c, q, params).fetchone()
             if row:
@@ -106,7 +106,7 @@ def create_customer(
                 tenant_id, customer_code, name, cpf, rg, phone, email, instagram,
                 zip_code, street, number, neighborhood, city, state, country,
                 created_at, updated_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s);
             """,
             (
                 tid,
@@ -156,10 +156,10 @@ def update_customer(
             c,
             """
             UPDATE customers SET
-                name = ?, cpf = ?, rg = ?, phone = ?, email = ?, instagram = ?,
-                zip_code = ?, street = ?, number = ?, neighborhood = ?,
-                city = ?, state = ?, country = ?, updated_at = ?
-            WHERE tenant_id = ? AND id = ?;
+                name = %s, cpf = %s, rg = %s, phone = %s, email = %s, instagram = %s,
+                zip_code = %s, street = %s, number = %s, neighborhood = %s,
+                city = %s, state = %s, country = %s, updated_at = %s
+            WHERE tenant_id = %s AND id = %s;
             """,
             (
                 name,
@@ -191,7 +191,7 @@ def get_customer_id_name_code(
         tid = effective_tenant_id_for_request(tenant_id)
         return db_execute(
             c,
-            "SELECT id, customer_code, name FROM customers WHERE tenant_id = ? AND id = ?;",
+            "SELECT id, customer_code, name FROM customers WHERE tenant_id = %s AND id = %s;",
             (tid, customer_id),
         ).fetchone()
 
@@ -206,7 +206,7 @@ def get_customer_sales_count(
         return int(
             db_execute(
                 c,
-                "SELECT COUNT(*) AS c FROM sales WHERE tenant_id = ? AND customer_id = ?;",
+                "SELECT COUNT(*) AS c FROM sales WHERE tenant_id = %s AND customer_id = %s;",
                 (tid, customer_id),
             ).fetchone()["c"]
         )
@@ -221,7 +221,7 @@ def delete_customer(
         tid = effective_tenant_id_for_request(tenant_id)
         db_execute(
             c,
-            "DELETE FROM customers WHERE tenant_id = ? AND id = ?;",
+            "DELETE FROM customers WHERE tenant_id = %s AND id = %s;",
             (tid, customer_id),
         )
 

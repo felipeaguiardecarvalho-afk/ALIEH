@@ -37,7 +37,7 @@ def _refresh_and_is_locked_impl(
         """
         SELECT failure_count, locked_until
         FROM login_user_throttle
-        WHERE tenant_id = ? AND username_norm = ?
+        WHERE tenant_id = %s AND username_norm = %s
         """,
         (tid, username_norm),
     ).fetchone()
@@ -51,8 +51,8 @@ def _refresh_and_is_locked_impl(
         c,
         """
         UPDATE login_user_throttle
-        SET failure_count = 0, locked_until = 0, updated_at = ?
-        WHERE tenant_id = ? AND username_norm = ?
+        SET failure_count = 0, locked_until = 0, updated_at = %s
+        WHERE tenant_id = %s AND username_norm = %s
         """,
         (_utc_iso_now(), tid, username_norm),
     )
@@ -84,7 +84,7 @@ def _record_failed_attempt_impl(
         """
         SELECT failure_count, locked_until
         FROM login_user_throttle
-        WHERE tenant_id = ? AND username_norm = ?
+        WHERE tenant_id = %s AND username_norm = %s
         """,
         (tid, username_norm),
     ).fetchone()
@@ -104,7 +104,7 @@ def _record_failed_attempt_impl(
         c,
         """
         INSERT INTO login_user_throttle (tenant_id, username_norm, failure_count, locked_until, updated_at)
-        VALUES (?, ?, ?, ?, ?)
+        VALUES (%s, %s, %s, %s, %s)
         ON CONFLICT(tenant_id, username_norm) DO UPDATE SET
             failure_count = excluded.failure_count,
             locked_until = excluded.locked_until,
@@ -144,7 +144,7 @@ def _clear_for_user_impl(
     tid = resolve_tenant_id(tenant_id)
     db_execute(
         c,
-        "DELETE FROM login_user_throttle WHERE tenant_id = ? AND username_norm = ?",
+        "DELETE FROM login_user_throttle WHERE tenant_id = %s AND username_norm = %s",
         (tid, username_norm),
     )
 
@@ -172,7 +172,7 @@ def _log_attempt_impl(
         c,
         """
         INSERT INTO login_attempt_audit (tenant_id, username_norm, success, created_at, client_hint)
-        VALUES (?, ?, ?, ?, ?)
+        VALUES (%s, %s, %s, %s, %s)
         """,
         (tid, username_norm, 1 if success else 0, _utc_iso_now(), client_hint),
     )

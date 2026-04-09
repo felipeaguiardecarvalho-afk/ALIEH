@@ -53,7 +53,7 @@ def get_sku_master_selling_price_row(
         tid = effective_tenant_id_for_request(tenant_id)
         return db_execute(
             c,
-            "SELECT selling_price FROM sku_master WHERE tenant_id = ? AND sku = ?;",
+            "SELECT selling_price FROM sku_master WHERE tenant_id = %s AND sku = %s;",
             (tid, sku),
         ).fetchone()
 
@@ -73,7 +73,7 @@ def create_price_history_entry(
             c,
             """
             INSERT INTO price_history (tenant_id, sku, old_price, new_price, created_at, note)
-            VALUES (?, ?, ?, ?, ?, ?);
+            VALUES (%s, %s, %s, %s, %s, %s);
             """,
             (tid, sku, old_price, new_price, created_at, note),
         )
@@ -91,8 +91,8 @@ def update_sku_master_selling_price(
         db_execute(
             c,
             """
-            UPDATE sku_master SET selling_price = ?, updated_at = ?
-            WHERE tenant_id = ? AND sku = ?;
+            UPDATE sku_master SET selling_price = %s, updated_at = %s
+            WHERE tenant_id = %s AND sku = %s;
             """,
             (selling_price, updated_at, tid, sku),
         )
@@ -109,7 +109,7 @@ def update_products_price_by_sku(
         db_execute(
             c,
             """
-            UPDATE products SET price = ? WHERE tenant_id = ? AND sku = ?;
+            UPDATE products SET price = %s WHERE tenant_id = %s AND sku = %s;
             """,
             (price, tid, sku),
         )
@@ -124,7 +124,7 @@ def get_sku_master_selling_and_avg_cost(
         tid = effective_tenant_id_for_request(tenant_id)
         return db_execute(
             c,
-            "SELECT selling_price, avg_unit_cost FROM sku_master WHERE tenant_id = ? AND sku = ?;",
+            "SELECT selling_price, avg_unit_cost FROM sku_master WHERE tenant_id = %s AND sku = %s;",
             (tid, sku),
         ).fetchone()
 
@@ -138,7 +138,7 @@ def update_sku_pricing_records_deactivate(
         tid = effective_tenant_id_for_request(tenant_id)
         db_execute(
             c,
-            "UPDATE sku_pricing_records SET is_active = 0 WHERE tenant_id = ? AND sku = ?;",
+            "UPDATE sku_pricing_records SET is_active = 0 WHERE tenant_id = %s AND sku = %s;",
             (tid, sku),
         )
 
@@ -169,7 +169,7 @@ def create_sku_pricing_record_active(
                 tenant_id, sku, avg_cost_snapshot, markup_pct, taxes_pct, interest_pct,
                 markup_kind, taxes_kind, interest_kind,
                 price_before_taxes, price_with_taxes, target_price, created_at, is_active
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1);
+            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, 1);
             """,
             (
                 tid,
@@ -204,15 +204,15 @@ def update_selling_price_apply_target(
         db_execute(
             c,
             """
-            UPDATE sku_master SET selling_price = ?, updated_at = ?
-            WHERE tenant_id = ? AND sku = ?;
+            UPDATE sku_master SET selling_price = %s, updated_at = %s
+            WHERE tenant_id = %s AND sku = %s;
             """,
             (target, now, tid, sku),
         )
         db_execute(
             c,
             """
-            UPDATE products SET price = ? WHERE tenant_id = ? AND sku = ?;
+            UPDATE products SET price = %s WHERE tenant_id = %s AND sku = %s;
             """,
             (target, tid, sku),
         )
@@ -220,7 +220,7 @@ def update_selling_price_apply_target(
             c,
             """
             INSERT INTO price_history (tenant_id, sku, old_price, new_price, created_at, note)
-            VALUES (?, ?, ?, ?, ?, ?);
+            VALUES (%s, %s, %s, %s, %s, %s);
             """,
             (tid, sku, old_sell, target, now, history_note),
         )
@@ -235,7 +235,7 @@ def get_product_name_sku_by_id(
         tid = effective_tenant_id_for_request(tenant_id)
         return db_execute(
             c,
-            "SELECT name, sku FROM products WHERE tenant_id = ? AND id = ?;",
+            "SELECT name, sku FROM products WHERE tenant_id = %s AND id = %s;",
             (tid, int(product_id)),
         ).fetchone()
 
@@ -252,7 +252,7 @@ def get_product_stock_name_sku_by_id(
             c,
             """
             SELECT stock, name, sku FROM products
-            WHERE tenant_id = ? AND id = ?;
+            WHERE tenant_id = %s AND id = %s;
             """,
             (tid, int(product_id)),
         ).fetchone()
@@ -270,7 +270,7 @@ def get_other_product_with_sku(
             c,
             """
             SELECT id FROM products
-            WHERE tenant_id = ? AND sku = ? AND id != ?;
+            WHERE tenant_id = %s AND sku = %s AND id != %s;
             """,
             (tid, new_sku, int(exclude_product_id)),
         ).fetchone()
@@ -294,8 +294,8 @@ def update_product_attributes_and_sku(
             c,
             """
             UPDATE products
-            SET frame_color = ?, lens_color = ?, style = ?, palette = ?, gender = ?, sku = ?
-            WHERE tenant_id = ? AND id = ?;
+            SET frame_color = %s, lens_color = %s, style = %s, palette = %s, gender = %s, sku = %s
+            WHERE tenant_id = %s AND id = %s;
             """,
             (
                 frame_color,
@@ -319,7 +319,7 @@ def get_sku_master_exists_row(
         tid = effective_tenant_id_for_request(tenant_id)
         return db_execute(
             c,
-            "SELECT 1 FROM sku_master WHERE tenant_id = ? AND sku = ?;",
+            "SELECT 1 FROM sku_master WHERE tenant_id = %s AND sku = %s;",
             (tid, sku),
         ).fetchone()
 
@@ -342,12 +342,12 @@ def get_same_batch_product_row(
             """
             SELECT id
             FROM products
-            WHERE tenant_id = ? AND name = ? AND registered_date = ?
-              AND COALESCE(frame_color, '') = ?
-              AND COALESCE(lens_color, '') = ?
-              AND COALESCE(style, '') = ?
-              AND COALESCE(palette, '') = ?
-              AND COALESCE(gender, '') = ?;
+            WHERE tenant_id = %s AND name = %s AND registered_date = %s
+              AND COALESCE(frame_color, '') = %s
+              AND COALESCE(lens_color, '') = %s
+              AND COALESCE(style, '') = %s
+              AND COALESCE(palette, '') = %s
+              AND COALESCE(gender, '') = %s;
             """,
             (
                 tid,
@@ -371,7 +371,7 @@ def get_product_id_by_sku(
         tid = effective_tenant_id_for_request(tenant_id)
         return db_execute(
             c,
-            "SELECT id FROM products WHERE tenant_id = ? AND sku = ?;",
+            "SELECT id FROM products WHERE tenant_id = %s AND sku = %s;",
             (tid, sku),
         ).fetchone()
 
@@ -400,7 +400,7 @@ def create_product_zero_stock(
                 tenant_id, name, sku, registered_date, product_enter_code, cost, price, stock,
                 frame_color, lens_color, style, palette, gender, created_at
             )
-            VALUES (?, ?, ?, ?, ?, 0, 0, 0, ?, ?, ?, ?, ?, ?);
+            VALUES (%s, %s, %s, %s, %s, 0, 0, 0, %s, %s, %s, %s, %s, %s);
             """,
             (
                 tid,
@@ -429,7 +429,7 @@ def update_product_image_path(
         db_execute(
             c,
             """
-            UPDATE products SET product_image_path = ? WHERE tenant_id = ? AND id = ?;
+            UPDATE products SET product_image_path = %s WHERE tenant_id = %s AND id = %s;
             """,
             (relative_path, tid, product_id),
         )
@@ -448,8 +448,8 @@ def update_product_cost_price(
             c,
             """
             UPDATE products
-            SET cost = ?, price = ?
-            WHERE tenant_id = ? AND id = ?;
+            SET cost = %s, price = %s
+            WHERE tenant_id = %s AND id = %s;
             """,
             (cost, price, tid, product_id),
         )
@@ -469,10 +469,10 @@ def get_instock_locked_batch_count(
             """
             SELECT COUNT(*) AS cnt
             FROM products
-            WHERE tenant_id = ?
-              AND name = ?
-              AND sku = ?
-              AND registered_date = ?
+            WHERE tenant_id = %s
+              AND name = %s
+              AND sku = %s
+              AND registered_date = %s
               AND stock > 0
               AND pricing_locked = 1;
             """,
@@ -496,13 +496,13 @@ def update_instock_batch_pricing_lock(
             c,
             """
             UPDATE products
-            SET cost = ?,
-                price = ?,
+            SET cost = %s,
+                price = %s,
                 pricing_locked = 1
-            WHERE tenant_id = ?
-              AND name = ?
-              AND sku = ?
-              AND registered_date = ?
+            WHERE tenant_id = %s
+              AND name = %s
+              AND sku = %s
+              AND registered_date = %s
               AND stock > 0;
             """,
             (cost, price, tid, product_name, sku, registered_date_text),
@@ -521,7 +521,7 @@ def get_distinct_skus_for_enter_code(
             c,
             """
             SELECT DISTINCT sku FROM products
-            WHERE tenant_id = ? AND product_enter_code = ? AND sku IS NOT NULL AND TRIM(sku) != '';
+            WHERE tenant_id = %s AND product_enter_code = %s AND sku IS NOT NULL AND TRIM(sku) != '';
             """,
             (tid, product_enter_code),
         ).fetchall()
@@ -542,7 +542,7 @@ def update_products_reset_stock_by_enter_code(
                 cost = 0,
                 price = 0,
                 pricing_locked = 0
-            WHERE tenant_id = ? AND product_enter_code = ?;
+            WHERE tenant_id = %s AND product_enter_code = %s;
             """,
             (tid, product_enter_code),
         )
@@ -563,7 +563,7 @@ def update_products_clear_cost_by_enter_code(
             SET cost = 0,
                 price = 0,
                 pricing_locked = 0
-            WHERE tenant_id = ? AND product_enter_code = ?;
+            WHERE tenant_id = %s AND product_enter_code = %s;
             """,
             (tid, product_enter_code),
         )
@@ -586,7 +586,7 @@ def decrement_product_stock_manual(
             c,
             """
             SELECT stock, sku, deleted_at FROM products
-            WHERE tenant_id = ? AND id = ?;
+            WHERE tenant_id = %s AND id = %s;
             """,
             (tid, int(product_id)),
         ).fetchone()
@@ -602,7 +602,7 @@ def decrement_product_stock_manual(
             )
         cur = db_execute(
             c,
-            "UPDATE products SET stock = stock - ? WHERE tenant_id = ? AND id = ?;",
+            "UPDATE products SET stock = stock - %s WHERE tenant_id = %s AND id = %s;",
             (q, tid, int(product_id)),
         )
         if int(cur.rowcount or 0) != 1:
@@ -610,7 +610,7 @@ def decrement_product_stock_manual(
         sync_sku_master_totals(c, sku, tenant_id=tid)
         new = db_execute(
             c,
-            "SELECT stock FROM products WHERE tenant_id = ? AND id = ?;",
+            "SELECT stock FROM products WHERE tenant_id = %s AND id = %s;",
             (tid, int(product_id)),
         ).fetchone()
         return float(new["stock"] if new else 0.0)

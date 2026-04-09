@@ -64,7 +64,7 @@ def get_user_by_username(
             """
             SELECT id, username, password_hash, role, tenant_id
             FROM users
-            WHERE tenant_id = ? AND LOWER(username) = LOWER(?)
+            WHERE tenant_id = %s AND LOWER(username) = LOWER(%s)
             LIMIT 1;
             """,
             (tid, u),
@@ -95,7 +95,7 @@ def create_user(
                 c,
                 """
                 INSERT INTO users (tenant_id, username, password_hash, created_at, role)
-                VALUES (?, ?, ?, ?, ?);
+                VALUES (%s, %s, %s, %s, %s);
                 """,
                 (tid, u, ph, now, role_db),
             )
@@ -120,8 +120,8 @@ def update_user_password(
         cur = db_execute(
             c,
             """
-            UPDATE users SET password_hash = ?
-            WHERE tenant_id = ? AND LOWER(username) = LOWER(?);
+            UPDATE users SET password_hash = %s
+            WHERE tenant_id = %s AND LOWER(username) = LOWER(%s);
             """,
             (ph, tid, u),
         )

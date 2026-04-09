@@ -27,7 +27,7 @@ def ensure_sku_master(
             INSERT OR IGNORE INTO sku_master (
                 tenant_id, sku, total_stock, avg_unit_cost, selling_price, updated_at, deleted_at
             )
-            VALUES (?, ?, 0, 0, 0, ?, NULL);
+            VALUES (%s, %s, 0, 0, 0, %s, NULL);
             """,
             (tid, sku, now),
         )
@@ -38,7 +38,7 @@ def ensure_sku_master(
             INSERT INTO sku_master (
                 tenant_id, sku, total_stock, avg_unit_cost, selling_price, updated_at, deleted_at
             )
-            VALUES (?, ?, 0, 0, 0, ?, NULL)
+            VALUES (%s, %s, 0, 0, 0, %s, NULL)
             ON CONFLICT (tenant_id, sku) DO NOTHING;
             """,
             (tid, sku, now),
@@ -56,7 +56,7 @@ def sync_sku_master_totals(
     tid = effective_tenant_id_for_request(tenant_id)
     exists = db_execute(
         conn,
-        "SELECT 1 FROM sku_master WHERE tenant_id = ? AND sku = ?;",
+        "SELECT 1 FROM sku_master WHERE tenant_id = %s AND sku = %s;",
         (tid, sku),
     ).fetchone()
     if exists is None:
@@ -66,7 +66,7 @@ def sync_sku_master_totals(
             conn,
             """
             SELECT COALESCE(SUM(stock), 0) FROM products
-            WHERE tenant_id = ? AND sku = ? AND deleted_at IS NULL;
+            WHERE tenant_id = %s AND sku = %s AND deleted_at IS NULL;
             """,
             (tid, sku),
         ).fetchone()[0]
@@ -75,8 +75,8 @@ def sync_sku_master_totals(
     db_execute(
         conn,
         """
-        UPDATE sku_master SET total_stock = ?, updated_at = ?
-        WHERE tenant_id = ? AND sku = ?;
+        UPDATE sku_master SET total_stock = %s, updated_at = %s
+        WHERE tenant_id = %s AND sku = %s;
         """,
         (total, now, tid, sku),
     )
